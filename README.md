@@ -31,6 +31,26 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v2.0 — Interactive Data Entry & Supabase Auth (2026-06-30)
+
+**Backend (`/backend`)**
+- `main.py` — Added new `POST /api/analyze-user` endpoint to dynamically build graph context from user-provided inputs and perform clinical risk reasoning. Fixed CORS configuration to resolve wildcard vs credentials issue.
+- `seed.py` — Updated fallback seeding output layout matching v2 specifications.
+
+**Frontend (`/frontend`)**
+- `utils/supabase/` [NEW] — Browser client, server client, and session middleware configuration for Supabase SSR.
+- `middleware.js` [NEW] — Automatic session validation and cookies refresh.
+- `app/login/page.js` [NEW] — Dark-theme Sign In & Sign Up auth portal.
+- `app/auth/callback/route.js` [NEW] — Route handler for Supabase session code exchange.
+- `app/page.js` — Complete rewrite to implement entry state (Data Entry Form) and results state (collapsible React Flow graph + chat).
+- `components/DataEntryPane.js` [NEW] — Structured wizard allowing users to add/delete Persons, Conditions, Medications, and Locations in real-time.
+- `components/GraphPane.js` — Upgraded to dynamically map, stagger layout, and render custom nodes from user-supplied datasets instead of hardcoded coordinates.
+- `components/ChatPane.js` — Configured suggestion chips generated dynamically from user entries and stripped legacy buttons.
+- `app/globals.css` — Styling updates for auth portal, data entry sections, animations, and topbar.
+
+**Database (`/supabase`)**
+- `migration.sql` [NEW] — Supabase database schema for the `medical_entries` table with Row Level Security (RLS) policies.
+
 ### v1.0 — MVP Scaffold (2026-06-30)
 
 **Backend (`/backend`)**

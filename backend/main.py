@@ -15,7 +15,10 @@ app = FastAPI(title="MedTree Medical Correlation Engine API")
 # Enable CORS for Next.js frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, restrict this. For hackathon, allow all.
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -75,6 +78,223 @@ DEFAULT_GRAPH = {
 
 class QueryRequest(BaseModel):
     query: str
+
+class UserData(BaseModel):
+    people: list = []
+    conditions: list = []
+    medications: list = []
+    locations: list = []
+
+class UserQueryRequest(BaseModel):
+    query: str
+    user_data: UserData
+
+def build_context_from_user_data(user_data: UserData) -> str:
+    """Build a natural-language graph context string from the user's medical entries."""
+    lines = []
+    
+    # People and relationships
+    for p in user_data.people:
+        rel = p.get("relationship", "Unknown")
+        name = p.get("name", "Unknown")
+        age = p.get("age")
+        age_str = f", Age {age}" if age else ""
+        lines.append(f"Person: {name} (Relationship: {rel}{age_str})")
+    
+    # Conditions
+    for c in user_data.conditions:
+        lines.append(f"Condition: {c.get('person_name', '?')} HAS_CONDITION -> {c.get('condition_name', '?')} (Type: {c.get('condition_type', '?')})")
+    
+    # Medications
+    for m in user_data.medications:
+        status = m.get("status", "Active")
+        lines.append(f"Medication: {m.get('person_name', '?')} {'PRESCRIBED' if status == 'Proposed' else 'TAKES'} -> {m.get('drug_name', '?')} (Status: {status})")
+    
+    # Locations
+    for loc in user_data.locations:
+        residents = loc.get("residents", [])
+        res_str = ", ".join(residents) if residents else "none"
+        lines.append(f"Location: {loc.get('location_name', '?')} — Residents: {res_str}")
+        # Implicit LIVES_WITH relationships
+        if len(residents) > 1:
+            for i, r1 in enumerate(residents):
+                for r2 in residents[i+1:]:
+                    lines.append(f"Relationship: {r1} LIVES_WITH {r2}")
+    
+    # Family relationships
+    self_people = [p for p in user_data.people if p.get("relationship") == "Self"]
+    for p in user_data.people:
+        rel = p.get("relationship", "")
+        name = p.get("name", "")
+        if rel == "Parent" and self_people:
+            lines.append(f"Relationship: {self_people[0].get('name')} CHILD_OF {name}")
+        elif rel == "Child" and self_people:
+            lines.append(f"Relationship: {name} CHILD_OF {self_people[0].get('name')}")
+        elif rel == "Sibling" and self_people:
+            lines.append(f"Relationship: {self_people[0].get('name')} SIBLING_OF {name}")
+        elif rel == "Roommate" and self_people:
+            lines.append(f"Relationship: {self_people[0].get('name')} LIVES_WITH {name}")
+    
+    return "\n".join(lines) if lines else "No medical data provided."
+
+def build_traversal_path_from_user_data(query: str, user_data: UserData) -> dict:
+    """Determine which nodes/edges to highlight based on the query keywords."""
+    query_lower = query.lower()
+    to_id = lambda s: s.lower().replace(" ", "_").replace("'", "")
+    # Remove non-alphanumeric chars except underscore
+    import re
+    to_id = lambda s: re.sub(r'[^a-z0-9_]', '', s.lower().replace(" ", "_"))
+    
+    all_node_ids = set()
+    all_edge_ids = set()
+    matched_node_ids = set()
+    matched_edge_ids = set()
+    
+    # Build all possible IDs
+    for p in user_data.people:
+        all_node_ids.add(to_id(p["name"]))
+    for c in user_data.conditions:
+        all_node_ids.add(to_id(c["condition_name"]))
+    for m in user_data.medications:
+        all_node_ids.add(to_id(m["drug_name"]))
+    for loc in user_data.locations:
+        all_node_ids.add(to_id(loc["location_name"]))
+    
+    # Find which nodes are mentioned in the query
+    for node_id in all_node_ids:
+        # Check if any word from the node id appears in the query
+        words = node_id.split("_")
+        if any(w in query_lower for w in words if len(w) > 2):
+            matched_node_ids.add(node_id)
+    
+    # If we matched a person, also include their conditions, meds, and family
+    for p in user_data.people:
+        pid = to_id(p["name"])
+        if pid in matched_node_ids:
+            # Add their conditions
+            for c in user_data.conditions:
+                if c.get("person_name", "").lower() == p["name"].lower():
+                    cid = to_id(c["condition_name"])
+                    matched_node_ids.add(cid)
+                    matched_edge_ids.add(f"e_{pid}_{cid}")
+            # Add their meds
+            for m in user_data.medications:
+                if m.get("person_name", "").lower() == p["name"].lower():
+                    mid = to_id(m["drug_name"])
+                    matched_node_ids.add(mid)
+                    matched_edge_ids.add(f"e_{pid}_{mid}")
+    
+    # If we matched a medication, find who takes it and their family
+    for m in user_data.medications:
+        mid = to_id(m["drug_name"])
+        if mid in matched_node_ids:
+            person_name = m.get("person_name", "")
+            pid = to_id(person_name)
+            matched_node_ids.add(pid)
+            matched_edge_ids.add(f"e_{pid}_{mid}")
+            # Find family of this person
+            self_people = [p for p in user_data.people if p.get("relationship") == "Self"]
+            for p in user_data.people:
+                ppid = to_id(p["name"])
+                rel = p.get("relationship", "")
+                if rel in ("Parent", "Child", "Sibling", "Roommate"):
+                    matched_node_ids.add(ppid)
+                    if self_people:
+                        sid = to_id(self_people[0]["name"])
+                        matched_edge_ids.add(f"e_{sid}_{ppid}")
+                    # Also add their conditions
+                    for c in user_data.conditions:
+                        if c.get("person_name", "").lower() == p["name"].lower():
+                            cid = to_id(c["condition_name"])
+                            matched_node_ids.add(cid)
+                            matched_edge_ids.add(f"e_{ppid}_{cid}")
+    
+    # If we matched a condition keyword in the query, find linked persons
+    for c in user_data.conditions:
+        cid = to_id(c["condition_name"])
+        cwords = c["condition_name"].lower().split()
+        if any(w in query_lower for w in cwords if len(w) > 2):
+            matched_node_ids.add(cid)
+            pid = to_id(c.get("person_name", ""))
+            matched_node_ids.add(pid)
+            matched_edge_ids.add(f"e_{pid}_{cid}")
+    
+    # Location matches
+    for loc in user_data.locations:
+        lid = to_id(loc["location_name"])
+        lwords = loc["location_name"].lower().split()
+        if any(w in query_lower for w in lwords if len(w) > 2):
+            matched_node_ids.add(lid)
+            for res in loc.get("residents", []):
+                rid = to_id(res)
+                matched_node_ids.add(rid)
+                matched_edge_ids.add(f"e_{rid}_{lid}")
+    
+    # If nothing matched, highlight everything
+    if not matched_node_ids:
+        matched_node_ids = all_node_ids
+    
+    return {
+        "nodes": list(matched_node_ids),
+        "edges": list(matched_edge_ids)
+    }
+
+@app.post("/api/analyze-user")
+async def analyze_user_query(request: UserQueryRequest):
+    """Analyze a clinical query using the user's own medical data as graph context."""
+    query = request.query
+    user_data = request.user_data
+    
+    # 1. Build context from user data
+    graph_context = build_context_from_user_data(user_data)
+    
+    # 2. Build traversal path
+    traversal_path = build_traversal_path_from_user_data(query, user_data)
+    
+    # 3. Call Claude for reasoning
+    warning = ""
+    if anthropic_client:
+        try:
+            system_prompt = (
+                "You are an expert clinical decision support AI assistant. "
+                "You are given a patient's medical graph data including family relationships, "
+                "conditions, medications, and living arrangements. "
+                "Analyze the data to find hidden multi-hop medical risks. "
+                "Look for: hereditary genetic risks, drug interaction dangers, "
+                "environmental hazards shared between cohabitants, and autoimmune clustering patterns. "
+                "Respond with a clear, concise clinical alert in Markdown format. "
+                "Include: the risk found, the traversal path through relationships, "
+                "and recommended actions for a doctor."
+            )
+            user_content = f"Clinical Query: {query}\n\nPatient Medical Graph Data:\n{graph_context}"
+            
+            response = anthropic_client.messages.create(
+                model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20240620"),
+                max_tokens=1200,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_content}]
+            )
+            warning = response.content[0].text
+        except Exception as e:
+            print(f"Anthropic API error: {e}")
+            warning = f"### ⚠️ API Error\n\nCould not reach Claude 3.5. Error: {str(e)}\n\n---\n\n**Graph Context (raw):**\n```\n{graph_context}\n```"
+    else:
+        # Fallback: return the raw context as the warning
+        warning = (
+            f"### ℹ️ Graph Analysis (No LLM)\n\n"
+            f"**Query:** {query}\n\n"
+            f"The Anthropic API key is not configured. Below is the raw graph context "
+            f"that would be sent to Claude 3.5 for medical reasoning:\n\n"
+            f"```\n{graph_context}\n```\n\n"
+            f"**Traversal:** {len(traversal_path['nodes'])} nodes and {len(traversal_path['edges'])} edges activated."
+        )
+    
+    return {
+        "warning": warning,
+        "cognee_context": graph_context,
+        "traversal_path": traversal_path,
+        "scenario_description": f"User data traversal: {len(traversal_path['nodes'])} nodes, {len(traversal_path['edges'])} edges activated."
+    }
 
 @app.get("/api/graph")
 async def get_graph():

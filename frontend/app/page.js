@@ -1,90 +1,323 @@
 'use client';
 
-import React, { useState } from 'react';
-import GraphPane from '../components/GraphPane';
-import ChatPane from '../components/ChatPane';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { createClient } from '@/utils/supabase/client';
+import GraphPane from '@/components/GraphPane';
+import ChatPane from '@/components/ChatPane';
+import DataEntryPane from '@/components/DataEntryPane';
+import { LogOut, ArrowLeft, Activity } from 'lucide-react';
 
 export default function Home() {
+  const router = useRouter();
+  const supabase = createClient();
+
+  // Auth state
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // App state: 'entry' | 'results'
+  const [appState, setAppState] = useState('entry');
+
+  // Data
+  const [entries, setEntries] = useState([]);
   const [traversalPath, setTraversalPath] = useState({ nodes: [], edges: [] });
+  const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
   const [isLoading, setIsLoading] = useState(false);
 
+  // Check auth on mount
+  useEffect(() => {
+    const checkUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        router.push('/login');
+        return;
+      }
+      setUser(user);
+      setAuthLoading(false);
+
+      // Load user's medical entries from Supabase
+      const { data, error } = await supabase
+        .from('medical_entries')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: true });
+
+      if (data) {
+        setEntries(data);
+      }
+    };
+    checkUser();
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push('/login');
+    router.refresh();
+  };
+
+  // Build graph data from user entries for visualization
+  const buildGraphFromEntries = useCallback((userEntries) => {
+    const nodes = [];
+    const edges = [];
+    const people = userEntries.filter(e => e.entry_type === 'person');
+    const conditions = userEntries.filter(e => e.entry_type === 'condition');
+    const medications = userEntries.filter(e => e.entry_type === 'medication');
+    const locations = userEntries.filter(e => e.entry_type === 'location');
+
+    const toId = (str) => (str || '').toLowerCase().replace(/[^a-z0-9]/g, '_');
+
+    // Add person nodes
+    people.forEach(p => {
+      nodes.push({
+        id: toId(p.data.name),
+        label: p.data.name,
+        type: 'Patient',
+        group: p.data.relationship,
+      });
+    });
+
+    // Add relationship edges between people
+    const selfPeople = people.filter(p => p.data.relationship === 'Self');
+    people.forEach(p => {
+      if (p.data.relationship === 'Parent' && selfPeople.length > 0) {
+        edges.push({
+          id: `e_${toId(selfPeople[0].data.name)}_${toId(p.data.name)}`,
+          source: toId(selfPeople[0].data.name),
+          target: toId(p.data.name),
+          label: 'CHILD_OF',
+        });
+      } else if (p.data.relationship === 'Child' && selfPeople.length > 0) {
+        edges.push({
+          id: `e_${toId(p.data.name)}_${toId(selfPeople[0].data.name)}`,
+          source: toId(p.data.name),
+          target: toId(selfPeople[0].data.name),
+          label: 'CHILD_OF',
+        });
+      } else if (p.data.relationship === 'Sibling' && selfPeople.length > 0) {
+        edges.push({
+          id: `e_${toId(selfPeople[0].data.name)}_${toId(p.data.name)}`,
+          source: toId(selfPeople[0].data.name),
+          target: toId(p.data.name),
+          label: 'SIBLING_OF',
+        });
+      } else if (p.data.relationship === 'Spouse' && selfPeople.length > 0) {
+        edges.push({
+          id: `e_${toId(selfPeople[0].data.name)}_${toId(p.data.name)}`,
+          source: toId(selfPeople[0].data.name),
+          target: toId(p.data.name),
+          label: 'SPOUSE_OF',
+        });
+      }
+    });
+
+    // Add condition nodes and edges
+    conditions.forEach(c => {
+      const condId = toId(c.data.condition_name);
+      if (!nodes.find(n => n.id === condId)) {
+        const typeMap = {
+          'Genetic': 'GeneticCondition',
+          'Autoimmune': 'AutoimmuneCondition',
+          'Symptom': 'Symptom',
+          'Allergy': 'Risk',
+          'Chronic': 'AutoimmuneCondition',
+        };
+        nodes.push({
+          id: condId,
+          label: c.data.condition_name,
+          type: typeMap[c.data.condition_type] || 'AutoimmuneCondition',
+          group: c.data.condition_type,
+        });
+      }
+      const personId = toId(c.data.person_name);
+      edges.push({
+        id: `e_${personId}_${condId}`,
+        source: personId,
+        target: condId,
+        label: 'HAS_CONDITION',
+      });
+    });
+
+    // Add medication nodes and edges
+    medications.forEach(m => {
+      const medId = toId(m.data.drug_name);
+      if (!nodes.find(n => n.id === medId)) {
+        nodes.push({
+          id: medId,
+          label: m.data.drug_name,
+          type: 'Medication',
+          group: 'medication',
+        });
+      }
+      const personId = toId(m.data.person_name);
+      edges.push({
+        id: `e_${personId}_${medId}`,
+        source: personId,
+        target: medId,
+        label: m.data.status === 'Proposed' ? 'PRESCRIBED' : 'TAKES',
+      });
+    });
+
+    // Add location nodes and edges
+    locations.forEach(l => {
+      const locId = toId(l.data.location_name);
+      if (!nodes.find(n => n.id === locId)) {
+        nodes.push({
+          id: locId,
+          label: l.data.location_name,
+          type: 'Location',
+          group: 'location',
+        });
+      }
+      (l.data.residents || []).forEach(residentName => {
+        const resId = toId(residentName);
+        if (nodes.find(n => n.id === resId)) {
+          edges.push({
+            id: `e_${resId}_${locId}`,
+            source: resId,
+            target: locId,
+            label: 'LIVES_AT',
+          });
+        }
+      });
+      // Add LIVES_WITH edges between residents
+      const residents = l.data.residents || [];
+      for (let i = 0; i < residents.length; i++) {
+        for (let j = i + 1; j < residents.length; j++) {
+          const id1 = toId(residents[i]);
+          const id2 = toId(residents[j]);
+          if (nodes.find(n => n.id === id1) && nodes.find(n => n.id === id2)) {
+            edges.push({
+              id: `e_lw_${id1}_${id2}`,
+              source: id1,
+              target: id2,
+              label: 'LIVES_WITH',
+            });
+          }
+        }
+      }
+    });
+
+    return { nodes, edges };
+  }, []);
+
+  // Analyze query
   const handleAnalyze = async (queryText) => {
     setIsLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/api/analyze', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      // Prepare user data payload for the backend
+      const payload = {
+        query: queryText,
+        user_data: {
+          people: entries.filter(e => e.entry_type === 'person').map(e => e.data),
+          conditions: entries.filter(e => e.entry_type === 'condition').map(e => e.data),
+          medications: entries.filter(e => e.entry_type === 'medication').map(e => e.data),
+          locations: entries.filter(e => e.entry_type === 'location').map(e => e.data),
         },
-        body: JSON.stringify({ query: queryText }),
+      };
+
+      const res = await fetch('http://localhost:8000/api/analyze-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
 
-      if (!res.ok) throw new Error('API server returned error');
+      if (!res.ok) throw new Error('Backend error');
       const data = await res.json();
-      
-      // Update the glowing/active paths in the React Flow graph
+
+      // Build full graph from user data
+      const fullGraph = buildGraphFromEntries(entries);
+      setGraphData(fullGraph);
       setTraversalPath(data.traversal_path || { nodes: [], edges: [] });
+      setAppState('results');
       setIsLoading(false);
       return data;
     } catch (err) {
-      console.error('Failed to analyze clinical query:', err);
+      console.error('Analysis failed:', err);
+
+      // Fallback: build graph locally and show it
+      const fullGraph = buildGraphFromEntries(entries);
+      setGraphData(fullGraph);
+      // Highlight all nodes/edges as a fallback
+      setTraversalPath({
+        nodes: fullGraph.nodes.map(n => n.id),
+        edges: fullGraph.edges.map(e => e.id),
+      });
+      setAppState('results');
       setIsLoading(false);
-      
-      // Standalone Fallback logic to let presentation work even without backend running
-      const lowerQuery = queryText.toLowerCase();
-      let fallbackData = null;
 
-      if (lowerQuery.includes('codeine') || lowerQuery.includes('alex') || lowerQuery.includes('jensen')) {
-        fallbackData = {
-          warning: "### ⚠️ CRITICAL ALERT: Hereditary Pharmacogenomic Risk (Fallback)\n\n**Patient:** Alex Jensen\n**Medication:** Codeine\n\n- **Genetic Marker:** Mother (Sarah Jensen) has **CYP2D6 Deficiency**.\n- **Clinical Risk:** Therapeutic Failure & Toxicity risk due to poor metabolism.\n- **Recommendation:** Avoid Codeine. Use **Morphine** or alternative non-prodrug analgesics.",
-          cognee_context: "Local Graph Fallback Context",
-          traversal_path: {
-            nodes: ["alex_jensen", "sarah_jensen", "cyp2d6_deficiency", "codeine"],
-            edges: ["e_alex_sarah", "e_sarah_cyp2d6", "e_cyp2d6_codeine", "e_alex_codeine"]
-          },
-          scenario_description: "Pharmacogenomics traversal: Alex -> Sarah -> CYP2D6 -> Codeine."
-        };
-      } else if (lowerQuery.includes('joints') || lowerQuery.includes('lily') || lowerQuery.includes('chen') || lowerQuery.includes('arthritis')) {
-        fallbackData = {
-          warning: "### ⚠️ ALERT: Hereditary Autoimmune Risk (Fallback)\n\n**Patient:** Lily Chen\n**Symptom:** Stiff Joints\n\n- **Family History:** Father (David Chen) has chronic **Psoriasis**.\n- **Clinical Risk:** Suspected early-onset **Psoriatic Arthritis** (PsA).\n- **Recommendation:** Refer to Rheumatology. Order HLA-B27 genetics and joint screening.",
-          cognee_context: "Local Graph Fallback Context",
-          traversal_path: {
-            nodes: ["lily_chen", "david_chen", "psoriasis", "psoriatic_arthritis"],
-            edges: ["e_lily_david", "e_david_psoriasis", "e_psoriasis_arthritis", "e_lily_arthritis"]
-          },
-          scenario_description: "Autoimmune clustering traversal: Lily -> David -> Psoriasis -> Psoriatic Arthritis."
-        };
-      } else if (lowerQuery.includes('respiratory') || lowerQuery.includes('marcus') || lowerQuery.includes('vance') || lowerQuery.includes('mold') || lowerQuery.includes('cough') || lowerQuery.includes('leo')) {
-        fallbackData = {
-          warning: "### ⚠️ DANGER ALERT: Environmental Overlap Detected (Fallback)\n\n**Patient:** Marcus Vance\n**Symptom:** Respiratory Distress\n\n- **Proximity:** Roommate (Leo Brooks) treated for identical distress.\n- **Source:** Apartment 3B has confirmed **Toxic Black Mold** in HVAC.\n- **Recommendation:** Immediately vacate Apartment 3B. Administer bronchodilators.",
-          cognee_context: "Local Graph Fallback Context",
-          traversal_path: {
-            nodes: ["marcus_vance", "leo_brooks", "apartment_3b", "toxic_mold", "respiratory_distress"],
-            edges: ["e_marcus_leo", "e_marcus_apt", "e_leo_apt", "e_leo_respiratory", "e_apt_mold", "e_mold_respiratory", "e_marcus_respiratory"]
-          },
-          scenario_description: "Environmental overlap traversal: Marcus -> Leo -> Apt 3B -> Mold -> Respiratory Distress."
-        };
-      } else {
-        fallbackData = {
-          warning: "### ℹ️ Analysis Complete (Fallback)\n\nQuery processed. No matching critical medical risk loops found in the local graph.",
-          cognee_context: "Local Graph Fallback Context",
-          traversal_path: { nodes: [], edges: [] },
-          scenario_description: "No path activated."
-        };
-      }
-
-      setTraversalPath(fallbackData.traversal_path);
-      return fallbackData;
+      return {
+        warning: `### ℹ️ Offline Analysis\n\nThe backend is not running. Showing your full medical graph. Connect the FastAPI backend for AI-powered risk analysis.\n\n**Your query:** ${queryText}`,
+        traversal_path: { nodes: fullGraph.nodes.map(n => n.id), edges: fullGraph.edges.map(e => e.id) },
+        scenario_description: 'Full graph displayed (offline mode).',
+      };
     }
   };
 
+  const handleBackToEntry = () => {
+    setAppState('entry');
+    setTraversalPath({ nodes: [], edges: [] });
+  };
+
+  if (authLoading) {
+    return (
+      <div className="loading-screen">
+        <Activity size={40} className="pulse-icon" style={{ color: '#66fcf1' }} />
+        <p>Loading MedTree…</p>
+      </div>
+    );
+  }
+
   return (
     <div className="app-container">
-      <div className="graph-section">
-        <GraphPane traversalPath={traversalPath} />
+      {/* Top bar */}
+      <div className="app-topbar">
+        <div className="topbar-left">
+          {appState === 'results' && (
+            <button className="topbar-btn" onClick={handleBackToEntry}>
+              <ArrowLeft size={16} /> Back to Data Entry
+            </button>
+          )}
+          <div className="topbar-brand">
+            <Activity size={18} style={{ color: '#66fcf1' }} />
+            <span>MedTree</span>
+          </div>
+        </div>
+        <div className="topbar-right">
+          <span className="topbar-email">{user?.email}</span>
+          <button className="topbar-btn topbar-logout" onClick={handleLogout}>
+            <LogOut size={14} /> Logout
+          </button>
+        </div>
       </div>
-      <div className="chat-section">
-        <ChatPane onAnalyze={handleAnalyze} isLoading={isLoading} />
+
+      {/* Main content area */}
+      <div className="app-main">
+        {/* Left pane: Data Entry OR Graph */}
+        <div className={`left-pane ${appState === 'results' ? 'show-graph' : 'show-entry'}`}>
+          {appState === 'entry' ? (
+            <DataEntryPane
+              userId={user?.id}
+              entries={entries}
+              setEntries={setEntries}
+              onDataChange={() => {}}
+            />
+          ) : (
+            <div className="graph-section">
+              <GraphPane graphData={graphData} traversalPath={traversalPath} />
+            </div>
+          )}
+        </div>
+
+        {/* Right pane: Chat */}
+        <div className="right-pane">
+          <ChatPane
+            onAnalyze={handleAnalyze}
+            isLoading={isLoading}
+            entries={entries}
+            appState={appState}
+          />
+        </div>
       </div>
     </div>
   );
