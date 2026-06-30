@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "id": "pharmacogenomics",
+      "title": "Pharmacogenomics (Genetic Edge)",
+      "description": "Alex Jensen is the biological son of Sarah Jensen. Sarah Jensen has a documented genetic deficiency of the CYP2D6 enzyme, which makes her a poor metabolizer of codeine and other prodrugs. Due to this deficiency, Sarah experiences severe side effects and lack of pain relief when taking Codeine.",
+      "entities": ["Alex Jensen", "Sarah Jensen", "CYP2D6 Deficiency", "Codeine"]
+    },
+    {
+      "id": "autoimmune",
+      "title": "Autoimmune Clustering (Hereditary Edge)",
+      "description": "Lily Chen is the biological daughter of David Chen. David Chen has a chronic history of severe Psoriasis, an autoimmune skin condition. Genetic history shows a high risk of autoimmune clusters in David's lineage, specifically Psoriatic Arthritis, which often presents with joint pain and stiffness in offspring.",
+      "entities": ["Lily Chen", "David Chen", "Psoriasis", "Psoriatic Arthritis"]
+    },
+    {
+      "id": "environmental",
+      "title": "Environmental Overlap (Proximity Edge)",
+      "description": "Marcus Vance lives with his roommate Leo Brooks at Apartment 3B. Recently, Leo Brooks suffered from persistent respiratory distress, severe coughing, and breathing difficulties. A home inspection of Apartment 3B confirmed a severe infestation of toxic black mold (Stachybotrys chartarum) in the HVAC vents, which was the direct cause of Leo's respiratory distress.",
+      "entities": ["Marcus Vance", "Leo Brooks", "Apartment 3B", "Respiratory Distress", "Toxic Black Mold"]
+    }
+  ]
+}

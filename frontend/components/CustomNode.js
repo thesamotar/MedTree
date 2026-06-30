@@ -1,0 +1,80 @@
+import React from 'react';
+import { Handle, Position } from '@xyflow/react';
+import { User, Pill, ShieldAlert, Dna, AlertTriangle, Home, Wind, Activity } from 'lucide-react';
+
+const CustomNode = ({ data, isConnectable }) => {
+  const { label, type, highlighted } = data;
+
+  const getIcon = (nodeType) => {
+    const iconSize = 16;
+    const lowerType = (nodeType || '').toLowerCase();
+    switch (lowerType) {
+      case 'patient':
+        return <User size={iconSize} style={{ color: '#60a5fa' }} />;
+      case 'medication':
+        return <Pill size={iconSize} style={{ color: '#34d399' }} />;
+      case 'geneticcondition':
+        return <Dna size={iconSize} style={{ color: '#a78bfa' }} />;
+      case 'autoimmunecondition':
+        return <Activity size={iconSize} style={{ color: '#fb7185' }} />;
+      case 'risk':
+        return <AlertTriangle size={iconSize} style={{ color: '#f87171' }} />;
+      case 'location':
+        return <Home size={iconSize} style={{ color: '#fbbf24' }} />;
+      case 'environmentalfactor':
+        return <Wind size={iconSize} style={{ color: '#f472b6' }} />;
+      case 'symptom':
+        return <ShieldAlert size={iconSize} style={{ color: '#22d3ee' }} />;
+      default:
+        return <Activity size={iconSize} style={{ color: '#c5c6c7' }} />;
+    }
+  };
+
+  const nodeTypeClass = (type || '').toLowerCase();
+
+  return (
+    <div className={`custom-node node-${nodeTypeClass} ${highlighted ? 'highlighted' : ''}`}>
+      {/* Target handle at the top */}
+      <Handle
+        type="target"
+        position={Position.Top}
+        isConnectable={isConnectable}
+        style={{ background: '#555', borderRadius: '4px' }}
+      />
+      {/* Target handle at the left */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        isConnectable={isConnectable}
+        style={{ background: '#555', borderRadius: '4px' }}
+      />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div className="node-icon-container">
+          {getIcon(type)}
+        </div>
+        <div>
+          <div className="node-header">{label}</div>
+          <div className="node-type">{type}</div>
+        </div>
+      </div>
+
+      {/* Source handle at the bottom */}
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        isConnectable={isConnectable}
+        style={{ background: '#555', borderRadius: '4px' }}
+      />
+      {/* Source handle at the right */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        isConnectable={isConnectable}
+        style={{ background: '#555', borderRadius: '4px' }}
+      />
+    </div>
+  );
+};
+
+export default CustomNode;
