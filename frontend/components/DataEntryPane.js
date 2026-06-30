@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import { User, UserPlus, HeartPulse, Pill, Home, Plus, Trash2, ChevronDown, ChevronRight, Copy, Check, X } from 'lucide-react';
+import { User, UserPlus, HeartPulse, Pill, Home, Plus, Trash2, ChevronDown, ChevronRight, Copy, Check, X, Eye, EyeOff } from 'lucide-react';
 
 const RELATIONSHIP_TYPES = ['Parent-Child', 'Roommate', 'Sibling-Sibling', 'Spouse'];
 const CONDITION_TYPES = ['Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy'];
@@ -13,6 +13,7 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
   const [expandedSection, setExpandedSection] = useState('profile');
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showInviteCode, setShowInviteCode] = useState(false);
 
   // ---------- Form states ----------
   const [profileForm, setProfileForm] = useState({
@@ -222,8 +223,11 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
             <span>{profile?.full_name || 'My Profile'}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ fontSize: '11px', color: 'var(--accent-cyan)', fontWeight: 500, fontFamily: 'monospace', opacity: 0.8 }}>
-                Code: {userId}
+                Code: {showInviteCode ? userId : '••••••••-••••-••••-••••-••••••••••••'}
               </span>
+              <button onClick={() => setShowInviteCode(v => !v)} className="de-remove-btn" title={showInviteCode ? 'Hide Invite Code' : 'Show Invite Code'}>
+                {showInviteCode ? <EyeOff size={11} /> : <Eye size={11} />}
+              </button>
               <button onClick={handleCopyInvite} className="de-remove-btn" title="Copy Invite Code">
                 {copied ? <Check size={11} style={{ color: '#34d399' }} /> : <Copy size={11} />}
               </button>
@@ -251,8 +255,14 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
                 <input
                   placeholder="Age"
                   type="number"
+                  min="0"
                   value={profileForm.age}
-                  onChange={e => setProfileForm(p => ({ ...p, age: e.target.value }))}
+                  onChange={e => {
+                    const val = e.target.value;
+                    if (val === '' || parseInt(val) >= 0) {
+                      setProfileForm(p => ({ ...p, age: val }));
+                    }
+                  }}
                   className="de-input de-input-small"
                   disabled={saving}
                 />
@@ -266,7 +276,7 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
 
         {/* ---- Connections Section ---- */}
         <div className="de-section">
-          <SectionHeader id="connections" icon={UserPlus} title="Consensual Links" count={activeRelationships.length} color="#fbbf24" />
+          <SectionHeader id="connections" icon={UserPlus} title="Family & Connections" count={activeRelationships.length + pendingIncoming.length + pendingOutgoing.length} color="#fbbf24" />
           {expandedSection === 'connections' && (
             <div className="de-section-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               {/* Send request form */}

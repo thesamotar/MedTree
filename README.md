@@ -48,8 +48,17 @@ You can also use the root `package.json` shortcuts:
   - Refined graph traversal logic to highlight cross-account relative nodes and edges dynamically.
 
 **Frontend (`/frontend`)**
-- `components/DataEntryPane.js` — Redesigned into three consensual sections: My Identity Details, Consensual Links (send requests, accept/reject incoming connections), and My Health Conditions/Medications (strictly self-entered).
+- `components/DataEntryPane.js` — Redesigned into three consensual sections: My Identity Details, Family & Connections, and My Health Conditions/Medications (strictly self-entered).
+  - Added hide/unhide toggle for the invite code.
+  - Renamed panel from "Consensual Links" to "Family & Connections" and updated badge to show combined active and pending requests.
+  - Constrained age field input to only allow non-negative (>= 0) values.
 - `app/page.js` — Added auto-profile-seeding on first login and parallel loaders for consensual network data.
+- `app/login/page.js` — Redesigned login screen to a modern split-pane design:
+  - Left-aligned high-visibility stylized typography branding and taglines.
+  - Right-aligned glassmorphic auth card.
+  - Added custom-rendered interactive HTML5 Canvas background drawing animated nodes and proximity links.
+  - Added forgot password flow via Supabase email resets.
+  - Added show/hide visibility toggle for password fields (which automatically defaults to hidden on tab changes).
 - `components/ChatPane.js` — Updated suggestion chip logic to scan self-owned records and active relationships.
 
 ### v2.0 — Interactive Data Entry & Supabase Auth (2026-06-30)

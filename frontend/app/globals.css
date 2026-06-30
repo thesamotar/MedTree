@@ -48,64 +48,88 @@ body {
 }
 
 /* ============================================================
-   Login Page
+   Login Page — Split Layout with Animated Graph
    ============================================================ */
 .login-page {
   height: 100vh;
   display: flex;
   align-items: center;
-  justify-content: center;
-  background:
-    radial-gradient(ellipse at 20% 50%, rgba(102, 252, 241, 0.04) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 50%, rgba(56, 189, 248, 0.04) 0%, transparent 50%),
-    var(--bg-color);
+  justify-content: space-between;
+  padding: 0 8vw;
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-color);
 }
 
+.login-graph-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* Left branding */
+.login-brand {
+  position: relative;
+  z-index: 1;
+  max-width: 440px;
+}
+
+.login-brand-title {
+  font-family: 'Inter', 'SF Pro Display', -apple-system, sans-serif;
+  font-size: 72px;
+  font-weight: 800;
+  letter-spacing: -3px;
+  line-height: 1;
+  background: linear-gradient(135deg, #66fcf1 0%, #38bdf8 40%, #a78bfa 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 20px;
+}
+
+.login-brand-tagline {
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--text-secondary, #9ca3af);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+/* Right-aligned card */
 .login-card {
-  width: 400px;
-  background: #111318;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  padding: 40px 36px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  position: relative;
+  z-index: 1;
+  width: 380px;
+  flex-shrink: 0;
+  background: rgba(17, 19, 24, 0.85);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(102, 252, 241, 0.1);
+  border-radius: 16px;
+  padding: 36px 32px;
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-.login-header {
-  text-align: center;
-  margin-bottom: 28px;
-}
-
-.login-logo {
-  margin-bottom: 12px;
-}
-
-.login-title {
-  font-size: 28px;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: -0.5px;
-}
-
-.login-subtitle {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-top: 4px;
-}
-
+/* Toggle tabs */
 .login-toggle {
   display: flex;
   gap: 4px;
-  background: #0d0f14;
-  border-radius: 8px;
+  background: rgba(13, 15, 20, 0.8);
+  border-radius: 10px;
   padding: 4px;
   margin-bottom: 24px;
 }
 
 .toggle-btn {
   flex: 1;
-  padding: 8px 12px;
+  padding: 9px 12px;
   border: none;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-muted);
   font-size: 13px;
@@ -114,14 +138,16 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  transition: all 0.2s;
+  transition: all 0.25s ease;
 }
 
 .toggle-btn.active {
-  background: var(--bg-card);
+  background: rgba(102, 252, 241, 0.08);
   color: var(--accent-cyan);
+  box-shadow: 0 0 12px rgba(102, 252, 241, 0.06);
 }
 
+/* Form */
 .login-form {
   display: flex;
   flex-direction: column;
@@ -134,48 +160,51 @@ body {
   color: var(--text-secondary);
   margin-bottom: 6px;
   font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .form-group input {
   width: 100%;
-  padding: 10px 14px;
-  background: var(--bg-input);
+  padding: 11px 14px;
+  background: rgba(13, 15, 20, 0.6);
   border: 1px solid var(--border-color);
-  border-radius: 6px;
+  border-radius: 8px;
   color: var(--text-primary);
   font-size: 14px;
   outline: none;
-  transition: border-color 0.2s;
+  transition: border-color 0.25s, box-shadow 0.25s;
 }
 
 .form-group input:focus {
   border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 3px rgba(102, 252, 241, 0.08);
 }
 
 .login-error {
   background: rgba(239, 68, 68, 0.1);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  border: 1px solid rgba(239, 68, 68, 0.25);
   color: #f87171;
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 13px;
 }
 
 .login-success {
   background: rgba(52, 211, 153, 0.1);
-  border: 1px solid rgba(52, 211, 153, 0.3);
+  border: 1px solid rgba(52, 211, 153, 0.25);
   color: #34d399;
   padding: 10px 14px;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 13px;
 }
 
 .login-submit {
   width: 100%;
   padding: 12px;
-  background: linear-gradient(135deg, #10b981, #0d9488);
+  background: linear-gradient(135deg, #10b981 0%, #0d9488 100%);
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   color: white;
   font-size: 14px;
   font-weight: 600;
@@ -184,19 +213,46 @@ body {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, transform 0.15s;
   margin-top: 4px;
 }
 
-.login-submit:hover { opacity: 0.9; }
-.login-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.login-submit:hover { opacity: 0.92; transform: translateY(-1px); }
+.login-submit:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
-.login-footer {
-  text-align: center;
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 24px;
+.login-forgot-btn {
+  background: none;
+  border: none;
+  color: var(--accent-cyan, #66fcf1);
+  cursor: pointer;
+  font-size: 12px;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: center;
+  width: 100%;
+  opacity: 0.75;
+  transition: opacity 0.2s;
 }
+
+.login-forgot-btn:hover {
+  opacity: 1;
+}
+
+/* Responsive: stack on small screens */
+@media (max-width: 860px) {
+  .login-page {
+    flex-direction: column;
+    justify-content: center;
+    gap: 32px;
+    padding: 40px 24px;
+  }
+  .login-brand { text-align: center; }
+  .login-brand-title { font-size: 48px; }
+  .login-card { width: 100%; max-width: 400px; }
+}
+
 
 /* ============================================================
    App Layout (Topbar + Main)
