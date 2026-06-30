@@ -19,36 +19,71 @@ export default function Home() {
   // App state: 'entry' | 'results'
   const [appState, setAppState] = useState('entry');
 
-  // Data
-  const [entries, setEntries] = useState([]);
+  // Data States
+  const [profile, setProfile] = useState(null);
+  const [profiles, setProfiles] = useState([]);
+  const [medicalRecords, setMedicalRecords] = useState([]);
+  const [relationships, setRelationships] = useState([]);
+
+  // Traversal and Loading States
   const [traversalPath, setTraversalPath] = useState({ nodes: [], edges: [] });
   const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
   const [isLoading, setIsLoading] = useState(false);
 
+  // Load all user and connection data
+  const loadAllData = useCallback(async (currUser) => {
+    // 1. Fetch or create user profile
+    let { data: prof, error: profErr } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', currUser.id)
+      .maybeSingle();
+
+    if (!prof) {
+      const defaultName = currUser.email.split('@')[0];
+      const { data: inserted, error: insertErr } = await supabase
+        .from('profiles')
+        .insert({ id: currUser.id, full_name: defaultName, age: null })
+        .select()
+        .single();
+      prof = inserted;
+    }
+    setProfile(prof);
+
+    // 2. Fetch all accessible medical records
+    const { data: records } = await supabase
+      .from('medical_records')
+      .select('*')
+      .order('created_at', { ascending: true });
+    setMedicalRecords(records || []);
+
+    // 3. Fetch all relationships
+    const { data: rels } = await supabase
+      .from('relationships')
+      .select('*');
+    setRelationships(rels || []);
+
+    // 4. Fetch all profiles to resolve names
+    const { data: allProfs } = await supabase
+      .from('profiles')
+      .select('*');
+    setProfiles(allProfs || []);
+  }, [supabase]);
+
   // Check auth on mount
   useEffect(() => {
     const checkUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      const { data: { user: currUser } } = await supabase.auth.getUser();
+      if (!currUser) {
         router.push('/login');
         return;
       }
-      setUser(user);
+      setUser(currUser);
       setAuthLoading(false);
-
-      // Load user's medical entries from Supabase
-      const { data, error } = await supabase
-        .from('medical_entries')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: true });
-
-      if (data) {
-        setEntries(data);
-      }
+      await loadAllData(currUser);
     };
     checkUser();
-  }, []);
+  }, [router, loadAllData]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -57,145 +92,105 @@ export default function Home() {
   };
 
   // Build graph data from user entries for visualization
-  const buildGraphFromEntries = useCallback((userEntries) => {
+  const buildGraphFromEntries = useCallback((profs, records, rels, currUser) => {
+    if (!currUser) return { nodes: [], edges: [] };
     const nodes = [];
     const edges = [];
-    const people = userEntries.filter(e => e.entry_type === 'person');
-    const conditions = userEntries.filter(e => e.entry_type === 'condition');
-    const medications = userEntries.filter(e => e.entry_type === 'medication');
-    const locations = userEntries.filter(e => e.entry_type === 'location');
 
     const toId = (str) => (str || '').toLowerCase().replace(/[^a-z0-9]/g, '_');
 
-    // Add person nodes
-    people.forEach(p => {
+    // 1. Find which profiles are active connections
+    const profilesMap = {};
+    profs.forEach(p => {
+      profilesMap[p.id] = p;
+    });
+
+    const activeRelations = [];
+    rels.forEach(rel => {
+      if (rel.status === 'active') {
+        if (rel.requester_id === currUser.id && rel.receiver_id in profilesMap) {
+          activeRelations.push({ user: profilesMap[rel.receiver_id], type: rel.relationship_type });
+        } else if (rel.receiver_id === currUser.id && rel.requester_id in profilesMap) {
+          activeRelations.push({ user: profilesMap[rel.requester_id], type: rel.relationship_type });
+        }
+      }
+    });
+
+    // 2. Add current user node
+    const currentUserProfile = profilesMap[currUser.id];
+    if (currentUserProfile) {
       nodes.push({
-        id: toId(p.data.name),
-        label: p.data.name,
+        id: currUser.id,
+        label: currentUserProfile.full_name,
         type: 'Patient',
-        group: p.data.relationship,
+        group: 'Self',
       });
-    });
+    }
 
-    // Add relationship edges between people
-    const selfPeople = people.filter(p => p.data.relationship === 'Self');
-    people.forEach(p => {
-      if (p.data.relationship === 'Parent' && selfPeople.length > 0) {
-        edges.push({
-          id: `e_${toId(selfPeople[0].data.name)}_${toId(p.data.name)}`,
-          source: toId(selfPeople[0].data.name),
-          target: toId(p.data.name),
-          label: 'CHILD_OF',
-        });
-      } else if (p.data.relationship === 'Child' && selfPeople.length > 0) {
-        edges.push({
-          id: `e_${toId(p.data.name)}_${toId(selfPeople[0].data.name)}`,
-          source: toId(p.data.name),
-          target: toId(selfPeople[0].data.name),
-          label: 'CHILD_OF',
-        });
-      } else if (p.data.relationship === 'Sibling' && selfPeople.length > 0) {
-        edges.push({
-          id: `e_${toId(selfPeople[0].data.name)}_${toId(p.data.name)}`,
-          source: toId(selfPeople[0].data.name),
-          target: toId(p.data.name),
-          label: 'SIBLING_OF',
-        });
-      } else if (p.data.relationship === 'Spouse' && selfPeople.length > 0) {
-        edges.push({
-          id: `e_${toId(selfPeople[0].data.name)}_${toId(p.data.name)}`,
-          source: toId(selfPeople[0].data.name),
-          target: toId(p.data.name),
-          label: 'SPOUSE_OF',
-        });
-      }
-    });
+    // 3. Add active relationship user nodes and edges
+    activeRelations.forEach(rel => {
+      nodes.push({
+        id: rel.user.id,
+        label: rel.user.full_name,
+        type: 'Patient',
+        group: rel.type,
+      });
 
-    // Add condition nodes and edges
-    conditions.forEach(c => {
-      const condId = toId(c.data.condition_name);
-      if (!nodes.find(n => n.id === condId)) {
-        const typeMap = {
-          'Genetic': 'GeneticCondition',
-          'Autoimmune': 'AutoimmuneCondition',
-          'Symptom': 'Symptom',
-          'Allergy': 'Risk',
-          'Chronic': 'AutoimmuneCondition',
-        };
-        nodes.push({
-          id: condId,
-          label: c.data.condition_name,
-          type: typeMap[c.data.condition_type] || 'AutoimmuneCondition',
-          group: c.data.condition_type,
-        });
-      }
-      const personId = toId(c.data.person_name);
+      // Relationship edge
       edges.push({
-        id: `e_${personId}_${condId}`,
-        source: personId,
-        target: condId,
-        label: 'HAS_CONDITION',
+        id: `e_${currUser.id}_${rel.user.id}`,
+        source: currUser.id,
+        target: rel.user.id,
+        label: rel.type === 'Parent-Child'
+          ? ((currentUserProfile?.age || 0) < (rel.user.age || 0) ? 'CHILD_OF' : 'PARENT_OF')
+          : rel.type === 'Roommate' ? 'LIVES_WITH' : rel.type === 'Sibling-Sibling' ? 'SIBLING_OF' : 'SPOUSE_OF',
       });
     });
 
-    // Add medication nodes and edges
-    medications.forEach(m => {
-      const medId = toId(m.data.drug_name);
-      if (!nodes.find(n => n.id === medId)) {
-        nodes.push({
-          id: medId,
-          label: m.data.drug_name,
-          type: 'Medication',
-          group: 'medication',
-        });
-      }
-      const personId = toId(m.data.person_name);
-      edges.push({
-        id: `e_${personId}_${medId}`,
-        source: personId,
-        target: medId,
-        label: m.data.status === 'Proposed' ? 'PRESCRIBED' : 'TAKES',
-      });
-    });
+    // 4. Add medical records (Conditions and Medications)
+    const activeUserIds = new Set([currUser.id, ...activeRelations.map(r => r.user.id)]);
+    const activeRecords = records.filter(r => activeUserIds.has(r.user_id));
 
-    // Add location nodes and edges
-    locations.forEach(l => {
-      const locId = toId(l.data.location_name);
-      if (!nodes.find(n => n.id === locId)) {
-        nodes.push({
-          id: locId,
-          label: l.data.location_name,
-          type: 'Location',
-          group: 'location',
-        });
-      }
-      (l.data.residents || []).forEach(residentName => {
-        const resId = toId(residentName);
-        if (nodes.find(n => n.id === resId)) {
-          edges.push({
-            id: `e_${resId}_${locId}`,
-            source: resId,
-            target: locId,
-            label: 'LIVES_AT',
+    activeRecords.forEach(r => {
+      const conceptId = toId(r.name);
+      
+      // Add concept node if not already present (shared nodes)
+      if (!nodes.find(n => n.id === conceptId)) {
+        if (r.record_type === 'condition') {
+          const typeMap = {
+            'Genetic': 'GeneticCondition',
+            'Autoimmune': 'AutoimmuneCondition',
+            'Symptom': 'Symptom',
+            'Allergy': 'Risk',
+            'Chronic': 'AutoimmuneCondition',
+          };
+          nodes.push({
+            id: conceptId,
+            label: r.name,
+            type: typeMap[r.metadata?.condition_type] || 'AutoimmuneCondition',
+            group: r.metadata?.condition_type || 'Chronic',
+          });
+        } else if (r.record_type === 'medication') {
+          nodes.push({
+            id: conceptId,
+            label: r.name,
+            type: 'Medication',
+            group: 'medication',
           });
         }
-      });
-      // Add LIVES_WITH edges between residents
-      const residents = l.data.residents || [];
-      for (let i = 0; i < residents.length; i++) {
-        for (let j = i + 1; j < residents.length; j++) {
-          const id1 = toId(residents[i]);
-          const id2 = toId(residents[j]);
-          if (nodes.find(n => n.id === id1) && nodes.find(n => n.id === id2)) {
-            edges.push({
-              id: `e_lw_${id1}_${id2}`,
-              source: id1,
-              target: id2,
-              label: 'LIVES_WITH',
-            });
-          }
-        }
       }
+
+      // Add edge from person to condition/medication
+      const label = r.record_type === 'condition'
+        ? 'HAS_CONDITION'
+        : (r.metadata?.status === 'Proposed' ? 'PRESCRIBED' : 'TAKES');
+
+      edges.push({
+        id: `e_${r.user_id}_${conceptId}`,
+        source: r.user_id,
+        target: conceptId,
+        label,
+      });
     });
 
     return { nodes, edges };
@@ -205,14 +200,14 @@ export default function Home() {
   const handleAnalyze = async (queryText) => {
     setIsLoading(true);
     try {
-      // Prepare user data payload for the backend
+      // Prepare consensual query payload
       const payload = {
         query: queryText,
+        user_id: user.id,
         user_data: {
-          people: entries.filter(e => e.entry_type === 'person').map(e => e.data),
-          conditions: entries.filter(e => e.entry_type === 'condition').map(e => e.data),
-          medications: entries.filter(e => e.entry_type === 'medication').map(e => e.data),
-          locations: entries.filter(e => e.entry_type === 'location').map(e => e.data),
+          profiles: profiles,
+          medical_records: medicalRecords,
+          relationships: relationships,
         },
       };
 
@@ -225,8 +220,8 @@ export default function Home() {
       if (!res.ok) throw new Error('Backend error');
       const data = await res.json();
 
-      // Build full graph from user data
-      const fullGraph = buildGraphFromEntries(entries);
+      // Build full graph from current state
+      const fullGraph = buildGraphFromEntries(profiles, medicalRecords, relationships, user);
       setGraphData(fullGraph);
       setTraversalPath(data.traversal_path || { nodes: [], edges: [] });
       setAppState('results');
@@ -236,9 +231,8 @@ export default function Home() {
       console.error('Analysis failed:', err);
 
       // Fallback: build graph locally and show it
-      const fullGraph = buildGraphFromEntries(entries);
+      const fullGraph = buildGraphFromEntries(profiles, medicalRecords, relationships, user);
       setGraphData(fullGraph);
-      // Highlight all nodes/edges as a fallback
       setTraversalPath({
         nodes: fullGraph.nodes.map(n => n.id),
         edges: fullGraph.edges.map(e => e.id),
@@ -247,7 +241,7 @@ export default function Home() {
       setIsLoading(false);
 
       return {
-        warning: `### ℹ️ Offline Analysis\n\nThe backend is not running. Showing your full medical graph. Connect the FastAPI backend for AI-powered risk analysis.\n\n**Your query:** ${queryText}`,
+        warning: `### ℹ️ Offline Analysis\n\nThe backend is not running. Showing your full consensual medical graph. Connect the FastAPI backend for AI-powered risk analysis.\n\n**Your query:** ${queryText}`,
         traversal_path: { nodes: fullGraph.nodes.map(n => n.id), edges: fullGraph.edges.map(e => e.id) },
         scenario_description: 'Full graph displayed (offline mode).',
       };
@@ -298,9 +292,11 @@ export default function Home() {
           {appState === 'entry' ? (
             <DataEntryPane
               userId={user?.id}
-              entries={entries}
-              setEntries={setEntries}
-              onDataChange={() => {}}
+              profile={profile}
+              profiles={profiles}
+              medicalRecords={medicalRecords}
+              relationships={relationships}
+              onDataChange={() => loadAllData(user)}
             />
           ) : (
             <div className="graph-section">
@@ -314,8 +310,11 @@ export default function Home() {
           <ChatPane
             onAnalyze={handleAnalyze}
             isLoading={isLoading}
-            entries={entries}
+            profiles={profiles}
+            medicalRecords={medicalRecords}
+            relationships={relationships}
             appState={appState}
+            user={user}
           />
         </div>
       </div>

@@ -37,7 +37,7 @@ const renderMarkdown = (text) => {
   });
 };
 
-const ChatPane = ({ onAnalyze, isLoading, entries = [], appState }) => {
+const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], relationships = [], appState, user }) => {
   const [query, setQuery] = useState('');
   const [history, setHistory] = useState([]);
   const messagesEndRef = useRef(null);
@@ -45,33 +45,37 @@ const ChatPane = ({ onAnalyze, isLoading, entries = [], appState }) => {
   // Build dynamic suggestion chips from user's data
   const suggestions = React.useMemo(() => {
     const chips = [];
-    const people = entries.filter(e => e.entry_type === 'person');
-    const meds = entries.filter(e => e.entry_type === 'medication');
-    const conditions = entries.filter(e => e.entry_type === 'condition');
+    if (!user) return chips;
+
+    const myProfile = profiles.find(p => p.id === user.id);
+    const myName = myProfile ? myProfile.full_name : 'me';
+
+    const myRecords = medicalRecords.filter(r => r.user_id === user.id);
+    const meds = myRecords.filter(r => r.record_type === 'medication');
+    const conditions = myRecords.filter(r => r.record_type === 'condition');
 
     meds.forEach(m => {
       chips.push({
-        text: `Is ${m.data.drug_name} safe for ${m.data.person_name}?`,
+        text: `Is ${m.name} safe for ${myName}?`,
         icon: '💊',
       });
     });
-    conditions.filter(c => c.data.condition_type === 'Symptom').forEach(c => {
+    conditions.filter(c => c.metadata?.condition_type === 'Symptom').forEach(c => {
       chips.push({
-        text: `${c.data.person_name} reports ${c.data.condition_name}`,
+        text: `${myName} reports ${c.name}`,
         icon: '🩺',
       });
     });
-    // If there are people with certain relationships, suggest hereditary check
-    const parents = people.filter(p => p.data.relationship === 'Parent');
-    const selfPeople = people.filter(p => p.data.relationship === 'Self');
-    if (parents.length > 0 && selfPeople.length > 0) {
+    // If there are people with active parent-child relationships, suggest hereditary check
+    const hasParent = relationships.some(r => r.status === 'active' && r.relationship_type === 'Parent-Child');
+    if (hasParent) {
       chips.push({
-        text: `Check hereditary risks for ${selfPeople[0].data.name}`,
+        text: `Check hereditary risks for ${myName}`,
         icon: '🧬',
       });
     }
     return chips.slice(0, 4); // max 4 suggestions
-  }, [entries]);
+  }, [profiles, medicalRecords, relationships, user]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

@@ -79,165 +79,184 @@ DEFAULT_GRAPH = {
 class QueryRequest(BaseModel):
     query: str
 
+class Profile(BaseModel):
+    id: str
+    full_name: str
+    age: int | None = None
+
+class MedicalRecord(BaseModel):
+    id: str
+    user_id: str
+    record_type: str
+    name: str
+    metadata: dict = {}
+
+class Relationship(BaseModel):
+    id: str
+    requester_id: str
+    receiver_id: str
+    relationship_type: str
+    status: str
+
 class UserData(BaseModel):
-    people: list = []
-    conditions: list = []
-    medications: list = []
-    locations: list = []
+    profiles: list[Profile] = []
+    medical_records: list[MedicalRecord] = []
+    relationships: list[Relationship] = []
 
 class UserQueryRequest(BaseModel):
     query: str
+    user_id: str
     user_data: UserData
 
-def build_context_from_user_data(user_data: UserData) -> str:
-    """Build a natural-language graph context string from the user's medical entries."""
+def build_context_from_user_data(query_request: UserQueryRequest) -> str:
+    """Build a natural-language graph context string from the user's multi-account database records."""
+    user_id = query_request.user_id
+    user_data = query_request.user_data
+    
+    # Map profiles by ID
+    profiles_map = {p.id: p for p in user_data.profiles}
+    current_user = profiles_map.get(user_id)
+    
+    if not current_user:
+        return "Requester profile not found."
+        
     lines = []
+    lines.append(f"Person: {current_user.full_name} (Relationship: Self, Age: {current_user.age or 'Unknown'})")
     
-    # People and relationships
-    for p in user_data.people:
-        rel = p.get("relationship", "Unknown")
-        name = p.get("name", "Unknown")
-        age = p.get("age")
-        age_str = f", Age {age}" if age else ""
-        lines.append(f"Person: {name} (Relationship: {rel}{age_str})")
-    
-    # Conditions
-    for c in user_data.conditions:
-        lines.append(f"Condition: {c.get('person_name', '?')} HAS_CONDITION -> {c.get('condition_name', '?')} (Type: {c.get('condition_type', '?')})")
-    
-    # Medications
-    for m in user_data.medications:
-        status = m.get("status", "Active")
-        lines.append(f"Medication: {m.get('person_name', '?')} {'PRESCRIBED' if status == 'Proposed' else 'TAKES'} -> {m.get('drug_name', '?')} (Status: {status})")
-    
-    # Locations
-    for loc in user_data.locations:
-        residents = loc.get("residents", [])
-        res_str = ", ".join(residents) if residents else "none"
-        lines.append(f"Location: {loc.get('location_name', '?')} — Residents: {res_str}")
-        # Implicit LIVES_WITH relationships
-        if len(residents) > 1:
-            for i, r1 in enumerate(residents):
-                for r2 in residents[i+1:]:
-                    lines.append(f"Relationship: {r1} LIVES_WITH {r2}")
-    
-    # Family relationships
-    self_people = [p for p in user_data.people if p.get("relationship") == "Self"]
-    for p in user_data.people:
-        rel = p.get("relationship", "")
-        name = p.get("name", "")
-        if rel == "Parent" and self_people:
-            lines.append(f"Relationship: {self_people[0].get('name')} CHILD_OF {name}")
-        elif rel == "Child" and self_people:
-            lines.append(f"Relationship: {name} CHILD_OF {self_people[0].get('name')}")
-        elif rel == "Sibling" and self_people:
-            lines.append(f"Relationship: {self_people[0].get('name')} SIBLING_OF {name}")
-        elif rel == "Roommate" and self_people:
-            lines.append(f"Relationship: {self_people[0].get('name')} LIVES_WITH {name}")
-    
+    # Logged-in user's own records
+    user_records = [r for r in user_data.medical_records if r.user_id == user_id]
+    for r in user_records:
+        if r.record_type == 'condition':
+            lines.append(f"Condition: {current_user.full_name} HAS_CONDITION -> {r.name} (Type: {r.metadata.get('condition_type', 'Chronic')})")
+        elif r.record_type == 'medication':
+            status = r.metadata.get('status', 'Active')
+            lines.append(f"Medication: {current_user.full_name} {'PRESCRIBED' if status == 'Proposed' else 'TAKES'} -> {r.name} (Status: {status})")
+
+    # Find active relationships and compile their records
+    active_relations = []
+    for rel in user_data.relationships:
+        if rel.status == 'active':
+            if rel.requester_id == user_id and rel.receiver_id in profiles_map:
+                active_relations.append((profiles_map[rel.receiver_id], rel.relationship_type, rel.id))
+            elif rel.receiver_id == user_id and rel.requester_id in profiles_map:
+                active_relations.append((profiles_map[rel.requester_id], rel.relationship_type, rel.id))
+
+    for rel_user, rel_type, rel_id in active_relations:
+        age_str = f", Age {rel_user.age}" if rel_user.age else ""
+        lines.append(f"Person: {rel_user.full_name} (Relationship: {rel_type}{age_str})")
+        
+        # Output relational links
+        if rel_type == 'Parent-Child':
+            # Assume child is the younger one or establish hierarchy
+            if (current_user.age or 0) < (rel_user.age or 0):
+                lines.append(f"Relationship: {current_user.full_name} CHILD_OF {rel_user.full_name}")
+            else:
+                lines.append(f"Relationship: {rel_user.full_name} CHILD_OF {current_user.full_name}")
+        elif rel_type == 'Roommate':
+            lines.append(f"Relationship: {current_user.full_name} LIVES_WITH {rel_user.full_name}")
+        elif rel_type == 'Sibling-Sibling':
+            lines.append(f"Relationship: {current_user.full_name} SIBLING_OF {rel_user.full_name}")
+        elif rel_type == 'Spouse':
+            lines.append(f"Relationship: {current_user.full_name} SPOUSE_OF {rel_user.full_name}")
+
+        # Fetch records for this relative
+        rel_records = [r for r in user_data.medical_records if r.user_id == rel_user.id]
+        for r in rel_records:
+            if r.record_type == 'condition':
+                lines.append(f"Condition: {rel_user.full_name} HAS_CONDITION -> {r.name} (Type: {r.metadata.get('condition_type', 'Chronic')})")
+            elif r.record_type == 'medication':
+                status = r.metadata.get('status', 'Active')
+                lines.append(f"Medication: {rel_user.full_name} {'PRESCRIBED' if status == 'Proposed' else 'TAKES'} -> {r.name} (Status: {status})")
+
     return "\n".join(lines) if lines else "No medical data provided."
 
-def build_traversal_path_from_user_data(query: str, user_data: UserData) -> dict:
-    """Determine which nodes/edges to highlight based on the query keywords."""
-    query_lower = query.lower()
-    to_id = lambda s: s.lower().replace(" ", "_").replace("'", "")
-    # Remove non-alphanumeric chars except underscore
+def build_traversal_path_from_user_data(query_request: UserQueryRequest) -> dict:
+    """Determine which nodes and edges to highlight in the dynamic graph based on query terms."""
+    query_lower = query_request.query.lower()
+    user_id = query_request.user_id
+    user_data = query_request.user_data
+    
     import re
     to_id = lambda s: re.sub(r'[^a-z0-9_]', '', s.lower().replace(" ", "_"))
     
     all_node_ids = set()
-    all_edge_ids = set()
     matched_node_ids = set()
     matched_edge_ids = set()
     
-    # Build all possible IDs
-    for p in user_data.people:
-        all_node_ids.add(to_id(p["name"]))
-    for c in user_data.conditions:
-        all_node_ids.add(to_id(c["condition_name"]))
-    for m in user_data.medications:
-        all_node_ids.add(to_id(m["drug_name"]))
-    for loc in user_data.locations:
-        all_node_ids.add(to_id(loc["location_name"]))
+    profiles_map = {p.id: p for p in user_data.profiles}
     
-    # Find which nodes are mentioned in the query
-    for node_id in all_node_ids:
-        # Check if any word from the node id appears in the query
-        words = node_id.split("_")
+    # 1. Collect all node IDs
+    for pid in profiles_map:
+        all_node_ids.add(pid)
+    for r in user_data.medical_records:
+        all_node_ids.add(to_id(r.name))
+        
+    # Find active connections
+    active_relations = []
+    for rel in user_data.relationships:
+        if rel.status == 'active':
+            if rel.requester_id == user_id and rel.receiver_id in profiles_map:
+                active_relations.append((profiles_map[rel.receiver_id], rel.relationship_type, rel.id))
+            elif rel.receiver_id == user_id and rel.requester_id in profiles_map:
+                active_relations.append((profiles_map[rel.requester_id], rel.relationship_type, rel.id))
+
+    # Add active relation edge IDs to help map highlights
+    active_rel_ids = {r[0].id for r in active_relations}
+
+    # 2. Check query matches
+    # Match user profile names
+    for pid, prof in profiles_map.items():
+        name_words = prof.full_name.lower().split()
+        if any(w in query_lower for w in name_words if len(w) > 2):
+            matched_node_ids.add(pid)
+
+    # Match medical record names
+    for r in user_data.medical_records:
+        rec_id = to_id(r.name)
+        words = r.name.lower().split()
         if any(w in query_lower for w in words if len(w) > 2):
-            matched_node_ids.add(node_id)
-    
-    # If we matched a person, also include their conditions, meds, and family
-    for p in user_data.people:
-        pid = to_id(p["name"])
-        if pid in matched_node_ids:
-            # Add their conditions
-            for c in user_data.conditions:
-                if c.get("person_name", "").lower() == p["name"].lower():
-                    cid = to_id(c["condition_name"])
-                    matched_node_ids.add(cid)
-                    matched_edge_ids.add(f"e_{pid}_{cid}")
-            # Add their meds
-            for m in user_data.medications:
-                if m.get("person_name", "").lower() == p["name"].lower():
-                    mid = to_id(m["drug_name"])
-                    matched_node_ids.add(mid)
-                    matched_edge_ids.add(f"e_{pid}_{mid}")
-    
-    # If we matched a medication, find who takes it and their family
-    for m in user_data.medications:
-        mid = to_id(m["drug_name"])
-        if mid in matched_node_ids:
-            person_name = m.get("person_name", "")
-            pid = to_id(person_name)
-            matched_node_ids.add(pid)
-            matched_edge_ids.add(f"e_{pid}_{mid}")
-            # Find family of this person
-            self_people = [p for p in user_data.people if p.get("relationship") == "Self"]
-            for p in user_data.people:
-                ppid = to_id(p["name"])
-                rel = p.get("relationship", "")
-                if rel in ("Parent", "Child", "Sibling", "Roommate"):
-                    matched_node_ids.add(ppid)
-                    if self_people:
-                        sid = to_id(self_people[0]["name"])
-                        matched_edge_ids.add(f"e_{sid}_{ppid}")
-                    # Also add their conditions
-                    for c in user_data.conditions:
-                        if c.get("person_name", "").lower() == p["name"].lower():
-                            cid = to_id(c["condition_name"])
-                            matched_node_ids.add(cid)
-                            matched_edge_ids.add(f"e_{ppid}_{cid}")
-    
-    # If we matched a condition keyword in the query, find linked persons
-    for c in user_data.conditions:
-        cid = to_id(c["condition_name"])
-        cwords = c["condition_name"].lower().split()
-        if any(w in query_lower for w in cwords if len(w) > 2):
-            matched_node_ids.add(cid)
-            pid = to_id(c.get("person_name", ""))
-            matched_node_ids.add(pid)
-            matched_edge_ids.add(f"e_{pid}_{cid}")
-    
-    # Location matches
-    for loc in user_data.locations:
-        lid = to_id(loc["location_name"])
-        lwords = loc["location_name"].lower().split()
-        if any(w in query_lower for w in lwords if len(w) > 2):
-            matched_node_ids.add(lid)
-            for res in loc.get("residents", []):
-                rid = to_id(res)
-                matched_node_ids.add(rid)
-                matched_edge_ids.add(f"e_{rid}_{lid}")
-    
-    # If nothing matched, highlight everything
+            matched_node_ids.add(rec_id)
+            
+    # Traversal expansions
+    # If a person is matched, expand to their conditions/meds and links to self
+    matched_people_ids = list(matched_node_ids.intersection(profiles_map.keys()))
+    for pid in matched_people_ids:
+        # Highlight relationship edge to current user
+        if pid != user_id and pid in active_rel_ids:
+            matched_edge_ids.add(f"e_{user_id}_{pid}")
+            matched_edge_ids.add(f"e_{pid}_{user_id}")
+            
+        # Highlight their records
+        for r in user_data.medical_records:
+            if r.user_id == pid:
+                rec_id = to_id(r.name)
+                matched_node_ids.add(rec_id)
+                matched_edge_ids.add(f"e_{pid}_{rec_id}")
+
+    # If a medical concept is matched, highlight the user(s) associated with it
+    for r in user_data.medical_records:
+        rec_id = to_id(r.name)
+        if rec_id in matched_node_ids:
+            pid = r.user_id
+            if pid in profiles_map:
+                matched_node_ids.add(pid)
+                matched_edge_ids.add(f"e_{pid}_{rec_id}")
+                
+                # Expand to relationship edge to current user
+                if pid != user_id and pid in active_rel_ids:
+                    matched_edge_ids.add(f"e_{user_id}_{pid}")
+                    matched_edge_ids.add(f"e_{pid}_{user_id}")
+
+    # If nothing matched, default to highlighting everything
     if not matched_node_ids:
         matched_node_ids = all_node_ids
-    
+
     return {
         "nodes": list(matched_node_ids),
         "edges": list(matched_edge_ids)
     }
+
+
 
 @app.post("/api/analyze-user")
 async def analyze_user_query(request: UserQueryRequest):

@@ -1,92 +1,201 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import { UserPlus, HeartPulse, Pill, Home, Plus, Trash2, ChevronDown, ChevronRight, Save } from 'lucide-react';
+import { User, UserPlus, HeartPulse, Pill, Home, Plus, Trash2, ChevronDown, ChevronRight, Copy, Check, X } from 'lucide-react';
 
-const RELATIONSHIP_TYPES = ['Self', 'Parent', 'Child', 'Sibling', 'Spouse', 'Roommate'];
+const RELATIONSHIP_TYPES = ['Parent-Child', 'Roommate', 'Sibling-Sibling', 'Spouse'];
 const CONDITION_TYPES = ['Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy'];
 const MED_STATUSES = ['Active', 'Proposed', 'Discontinued'];
 
-const DataEntryPane = ({ userId, entries, setEntries, onDataChange }) => {
+const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationships, onDataChange }) => {
   const supabase = createClient();
-  const [expandedSection, setExpandedSection] = useState('people');
+  const [expandedSection, setExpandedSection] = useState('profile');
   const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState(false);
 
-  // ---------- Form state for each section ----------
-  const [personForm, setPersonForm] = useState({ name: '', relationship: 'Self', age: '' });
-  const [conditionForm, setConditionForm] = useState({ person_name: '', condition_name: '', condition_type: 'Chronic' });
-  const [medForm, setMedForm] = useState({ person_name: '', drug_name: '', status: 'Active' });
-  const [locationForm, setLocationForm] = useState({ location_name: '', residents: '' });
+  // ---------- Form states ----------
+  const [profileForm, setProfileForm] = useState({
+    name: profile?.full_name || '',
+    age: profile?.age || ''
+  });
+  const [connectForm, setConnectForm] = useState({
+    receiver_id: '',
+    relationship_type: 'Parent-Child'
+  });
+  const [conditionForm, setConditionForm] = useState({ condition_name: '', condition_type: 'Chronic' });
+  const [medForm, setMedForm] = useState({ drug_name: '', status: 'Active' });
+
+  // Update profile form when profile loads
+  React.useEffect(() => {
+    if (profile) {
+      setProfileForm({
+        name: profile.full_name || '',
+        age: profile.age || ''
+      });
+    }
+  }, [profile]);
 
   // Derived lists
-  const people = entries.filter(e => e.entry_type === 'person');
-  const conditions = entries.filter(e => e.entry_type === 'condition');
-  const medications = entries.filter(e => e.entry_type === 'medication');
-  const locations = entries.filter(e => e.entry_type === 'location');
-  const personNames = people.map(p => p.data.name);
+  const profilesMap = React.useMemo(() => {
+    const map = {};
+    profiles.forEach(p => { map[p.id] = p; });
+    return map;
+  }, [profiles]);
 
-  // ---------- CRUD helpers ----------
-  const addEntry = async (entry_type, data) => {
+  const myRecords = medicalRecords.filter(r => r.user_id === userId);
+  const myConditions = myRecords.filter(r => r.record_type === 'condition');
+  const myMedications = myRecords.filter(r => r.record_type === 'medication');
+
+  // Parse relationship lists
+  const activeRelationships = [];
+  const pendingIncoming = [];
+  const pendingOutgoing = [];
+
+  relationships.forEach(rel => {
+    if (rel.status === 'active') {
+      const relUserId = rel.requester_id === userId ? rel.receiver_id : rel.requester_id;
+      const relUser = profilesMap[relUserId];
+      if (relUser) {
+        activeRelationships.push({ rel, user: relUser });
+      }
+    } else if (rel.status === 'pending') {
+      if (rel.receiver_id === userId) {
+        const requesterUser = profilesMap[rel.requester_id];
+        if (requesterUser) {
+          pendingIncoming.push({ rel, user: requesterUser });
+        }
+      } else if (rel.requester_id === userId) {
+        const receiverUser = profilesMap[rel.receiver_id];
+        if (receiverUser) {
+          pendingOutgoing.push({ rel, user: receiverUser });
+        }
+      }
+    }
+  });
+
+  // ---------- Handlers ----------
+  const handleCopyInvite = () => {
+    navigator.clipboard.writeText(userId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleUpdateProfile = async (e) => {
+    e.preventDefault();
     setSaving(true);
-    const newEntry = { user_id: userId, entry_type, data };
+    const { error } = await supabase
+      .from('profiles')
+      .update({
+        full_name: profileForm.name,
+        age: profileForm.age ? parseInt(profileForm.age) : null
+      })
+      .eq('id', userId);
 
-    const { data: inserted, error } = await supabase
-      .from('medical_entries')
-      .insert(newEntry)
-      .select()
-      .single();
+    if (error) console.error('Failed to update profile:', error);
+    setSaving(false);
+    onDataChange?.();
+  };
+
+  const handleSendRequest = async (e) => {
+    e.preventDefault();
+    const targetId = connectForm.receiver_id.trim();
+    if (!targetId || targetId === userId) return;
+
+    setSaving(true);
+    const { error } = await supabase
+      .from('relationships')
+      .insert({
+        requester_id: userId,
+        receiver_id: targetId,
+        relationship_type: connectForm.relationship_type,
+        status: 'pending'
+      });
 
     if (error) {
-      console.error('Supabase insert error:', error);
-      // Fallback: add locally with temp id
-      const localEntry = { ...newEntry, id: `local_${Date.now()}`, created_at: new Date().toISOString() };
-      setEntries(prev => [...prev, localEntry]);
+      console.error('Failed to send relation request:', error);
+      alert('Could not send invite. Verify the Invite Code is correct.');
     } else {
-      setEntries(prev => [...prev, inserted]);
+      setConnectForm(prev => ({ ...prev, receiver_id: '' }));
     }
     setSaving(false);
     onDataChange?.();
   };
 
-  const removeEntry = async (id) => {
-    if (id.startsWith?.('local_')) {
-      setEntries(prev => prev.filter(e => e.id !== id));
-    } else {
-      await supabase.from('medical_entries').delete().eq('id', id);
-      setEntries(prev => prev.filter(e => e.id !== id));
-    }
+  const handleAcceptRequest = async (relId) => {
+    setSaving(true);
+    const { error } = await supabase
+      .from('relationships')
+      .update({ status: 'active' })
+      .eq('id', relId);
+
+    if (error) console.error('Failed to accept request:', error);
+    setSaving(false);
     onDataChange?.();
   };
 
-  // ---------- Section handlers ----------
-  const handleAddPerson = (e) => {
-    e.preventDefault();
-    if (!personForm.name.trim()) return;
-    addEntry('person', { ...personForm, age: parseInt(personForm.age) || null });
-    setPersonForm({ name: '', relationship: 'Self', age: '' });
+  const handleRejectRequest = async (relId) => {
+    setSaving(true);
+    const { error } = await supabase
+      .from('relationships')
+      .delete()
+      .eq('id', relId);
+
+    if (error) console.error('Failed to delete relationship:', error);
+    setSaving(false);
+    onDataChange?.();
   };
 
-  const handleAddCondition = (e) => {
+  const handleAddCondition = async (e) => {
     e.preventDefault();
-    if (!conditionForm.person_name || !conditionForm.condition_name.trim()) return;
-    addEntry('condition', { ...conditionForm });
-    setConditionForm({ person_name: conditionForm.person_name, condition_name: '', condition_type: 'Chronic' });
+    if (!conditionForm.condition_name.trim()) return;
+
+    setSaving(true);
+    const { error } = await supabase
+      .from('medical_records')
+      .insert({
+        user_id: userId,
+        record_type: 'condition',
+        name: conditionForm.condition_name.trim(),
+        metadata: { condition_type: conditionForm.condition_type }
+      });
+
+    if (error) console.error('Failed to add condition:', error);
+    setConditionForm({ condition_name: '', condition_type: 'Chronic' });
+    setSaving(false);
+    onDataChange?.();
   };
 
-  const handleAddMedication = (e) => {
+  const handleAddMedication = async (e) => {
     e.preventDefault();
-    if (!medForm.person_name || !medForm.drug_name.trim()) return;
-    addEntry('medication', { ...medForm });
-    setMedForm({ person_name: medForm.person_name, drug_name: '', status: 'Active' });
+    if (!medForm.drug_name.trim()) return;
+
+    setSaving(true);
+    const { error } = await supabase
+      .from('medical_records')
+      .insert({
+        user_id: userId,
+        record_type: 'medication',
+        name: medForm.drug_name.trim(),
+        metadata: { status: medForm.status }
+      });
+
+    if (error) console.error('Failed to add medication:', error);
+    setMedForm({ drug_name: '', status: 'Active' });
+    setSaving(false);
+    onDataChange?.();
   };
 
-  const handleAddLocation = (e) => {
-    e.preventDefault();
-    if (!locationForm.location_name.trim()) return;
-    const residentsArr = locationForm.residents.split(',').map(r => r.trim()).filter(Boolean);
-    addEntry('location', { location_name: locationForm.location_name, residents: residentsArr });
-    setLocationForm({ location_name: '', residents: '' });
+  const handleDeleteRecord = async (recordId) => {
+    setSaving(true);
+    const { error } = await supabase
+      .from('medical_records')
+      .delete()
+      .eq('id', recordId);
+
+    if (error) console.error('Failed to delete medical record:', error);
+    setSaving(false);
+    onDataChange?.();
   };
 
   const toggleSection = (section) => {
@@ -98,7 +207,7 @@ const DataEntryPane = ({ userId, entries, setEntries, onDataChange }) => {
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <Icon size={18} style={{ color }} />
         <span>{title}</span>
-        <span className="de-count">{count}</span>
+        {count !== undefined && <span className="de-count">{count}</span>}
       </div>
       {expandedSection === id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
     </button>
@@ -106,54 +215,153 @@ const DataEntryPane = ({ userId, entries, setEntries, onDataChange }) => {
 
   return (
     <div className="data-entry-pane">
+      {/* Header */}
       <div className="de-header">
-        <h2 className="de-title">Medical Profile</h2>
-        <p className="de-subtitle">Add your medical data to build your health graph</p>
+        <h2 className="de-title">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span>{profile?.full_name || 'My Profile'}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '11px', color: 'var(--accent-cyan)', fontWeight: 500, fontFamily: 'monospace', opacity: 0.8 }}>
+                Code: {userId}
+              </span>
+              <button onClick={handleCopyInvite} className="de-remove-btn" title="Copy Invite Code">
+                {copied ? <Check size={11} style={{ color: '#34d399' }} /> : <Copy size={11} />}
+              </button>
+            </div>
+          </div>
+        </h2>
+        <p className="de-subtitle">Self-own your health history and link with relatives securely.</p>
       </div>
 
       <div className="de-sections">
-        {/* ---- People Section ---- */}
+        {/* ---- My Profile Info Section ---- */}
         <div className="de-section">
-          <SectionHeader id="people" icon={UserPlus} title="People & Relationships" count={people.length} color="#60a5fa" />
-          {expandedSection === 'people' && (
+          <SectionHeader id="profile" icon={User} title="My Identity details" color="#60a5fa" />
+          {expandedSection === 'profile' && (
             <div className="de-section-body">
-              <form onSubmit={handleAddPerson} className="de-form-row">
+              <form onSubmit={handleUpdateProfile} className="de-form-row">
                 <input
-                  placeholder="Name"
-                  value={personForm.name}
-                  onChange={e => setPersonForm(p => ({ ...p, name: e.target.value }))}
+                  placeholder="Full Name"
+                  value={profileForm.name}
+                  onChange={e => setProfileForm(p => ({ ...p, name: e.target.value }))}
                   className="de-input"
                   required
+                  disabled={saving}
                 />
-                <select
-                  value={personForm.relationship}
-                  onChange={e => setPersonForm(p => ({ ...p, relationship: e.target.value }))}
-                  className="de-select"
-                >
-                  {RELATIONSHIP_TYPES.map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
                 <input
                   placeholder="Age"
                   type="number"
-                  value={personForm.age}
-                  onChange={e => setPersonForm(p => ({ ...p, age: e.target.value }))}
+                  value={profileForm.age}
+                  onChange={e => setProfileForm(p => ({ ...p, age: e.target.value }))}
                   className="de-input de-input-small"
+                  disabled={saving}
                 />
                 <button type="submit" className="de-add-btn" disabled={saving}>
-                  <Plus size={14} />
+                  Save
                 </button>
               </form>
-              <div className="de-list">
-                {people.map(p => (
-                  <div key={p.id} className="de-list-item">
-                    <div>
-                      <span className="de-item-name">{p.data.name}</span>
-                      <span className="de-item-badge" style={{ borderColor: '#60a5fa', color: '#60a5fa' }}>{p.data.relationship}</span>
-                      {p.data.age && <span className="de-item-meta">Age {p.data.age}</span>}
-                    </div>
-                    <button className="de-remove-btn" onClick={() => removeEntry(p.id)}><Trash2 size={13} /></button>
+            </div>
+          )}
+        </div>
+
+        {/* ---- Connections Section ---- */}
+        <div className="de-section">
+          <SectionHeader id="connections" icon={UserPlus} title="Consensual Links" count={activeRelationships.length} color="#fbbf24" />
+          {expandedSection === 'connections' && (
+            <div className="de-section-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {/* Send request form */}
+              <form onSubmit={handleSendRequest} className="de-form-row" style={{ flexDirection: 'column', gap: '8px' }}>
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>CONNECT RELATIVE / ROOMMATE:</span>
+                <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+                  <input
+                    placeholder="Paste their Invite Code here..."
+                    value={connectForm.receiver_id}
+                    onChange={e => setConnectForm(p => ({ ...p, receiver_id: e.target.value }))}
+                    className="de-input"
+                    required
+                    disabled={saving}
+                  />
+                  <select
+                    value={connectForm.relationship_type}
+                    onChange={e => setConnectForm(p => ({ ...p, relationship_type: e.target.value }))}
+                    className="de-select"
+                    disabled={saving}
+                  >
+                    {RELATIONSHIP_TYPES.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                  <button type="submit" className="de-add-btn" disabled={saving}>
+                    <Plus size={14} />
+                  </button>
+                </div>
+              </form>
+
+              {/* Pending Incoming Requests */}
+              {pendingIncoming.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span style={{ fontSize: '11px', color: '#fbbf24', fontWeight: 600 }}>INCOMING REQUESTS:</span>
+                  <div className="de-list">
+                    {pendingIncoming.map(({ rel, user }) => (
+                      <div key={rel.id} className="de-list-item">
+                        <div>
+                          <span className="de-item-name">{user.full_name}</span>
+                          <span className="de-item-badge" style={{ borderColor: '#fbbf24', color: '#fbbf24' }}>{rel.relationship_type}</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button className="de-remove-btn" onClick={() => handleAcceptRequest(rel.id)} title="Accept connection request">
+                            <Check size={14} style={{ color: '#34d399' }} />
+                          </button>
+                          <button className="de-remove-btn" onClick={() => handleRejectRequest(rel.id)} title="Decline request">
+                            <X size={14} style={{ color: '#fb7185' }} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
+              )}
+
+              {/* Pending Outgoing Requests */}
+              {pendingOutgoing.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>SENT REQUESTS (PENDING):</span>
+                  <div className="de-list">
+                    {pendingOutgoing.map(({ rel, user }) => (
+                      <div key={rel.id} className="de-list-item">
+                        <div>
+                          <span className="de-item-name">{user.full_name}</span>
+                          <span className="de-item-badge" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>{rel.relationship_type}</span>
+                        </div>
+                        <button className="de-remove-btn" onClick={() => handleRejectRequest(rel.id)} title="Cancel request">
+                          <X size={14} style={{ color: '#6b7280' }} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Active Connections */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '11px', color: '#34d399', fontWeight: 600 }}>ACTIVE CONNECTIONS:</span>
+                <div className="de-list">
+                  {activeRelationships.map(({ rel, user }) => (
+                    <div key={rel.id} className="de-list-item">
+                      <div>
+                        <span className="de-item-name">{user.full_name}</span>
+                        <span className="de-item-badge" style={{ borderColor: '#34d399', color: '#34d399' }}>{rel.relationship_type}</span>
+                        {user.age && <span className="de-item-meta">Age {user.age}</span>}
+                      </div>
+                      <button className="de-remove-btn" onClick={() => handleRejectRequest(rel.id)} title="Disconnect link">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
+                  {activeRelationships.length === 0 && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', padding: '10px 0' }}>
+                      No active familial links. Invite relatives to see combined safety correlations.
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -161,30 +369,23 @@ const DataEntryPane = ({ userId, entries, setEntries, onDataChange }) => {
 
         {/* ---- Conditions Section ---- */}
         <div className="de-section">
-          <SectionHeader id="conditions" icon={HeartPulse} title="Conditions & Markers" count={conditions.length} color="#fb7185" />
+          <SectionHeader id="conditions" icon={HeartPulse} title="My Health Conditions" count={myConditions.length} color="#fb7185" />
           {expandedSection === 'conditions' && (
             <div className="de-section-body">
               <form onSubmit={handleAddCondition} className="de-form-row">
-                <select
-                  value={conditionForm.person_name}
-                  onChange={e => setConditionForm(c => ({ ...c, person_name: e.target.value }))}
-                  className="de-select"
-                  required
-                >
-                  <option value="">Link to person…</option>
-                  {personNames.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
                 <input
-                  placeholder="Condition name"
+                  placeholder="e.g. Asthma, CYP2D6 Deficiency"
                   value={conditionForm.condition_name}
                   onChange={e => setConditionForm(c => ({ ...c, condition_name: e.target.value }))}
                   className="de-input"
                   required
+                  disabled={saving}
                 />
                 <select
                   value={conditionForm.condition_type}
                   onChange={e => setConditionForm(c => ({ ...c, condition_type: e.target.value }))}
                   className="de-select"
+                  disabled={saving}
                 >
                   {CONDITION_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
@@ -192,15 +393,14 @@ const DataEntryPane = ({ userId, entries, setEntries, onDataChange }) => {
                   <Plus size={14} />
                 </button>
               </form>
-              <div className="de-list">
-                {conditions.map(c => (
+              <div className="de-list" style={{ marginTop: '10px' }}>
+                {myConditions.map(c => (
                   <div key={c.id} className="de-list-item">
                     <div>
-                      <span className="de-item-name">{c.data.condition_name}</span>
-                      <span className="de-item-badge" style={{ borderColor: '#fb7185', color: '#fb7185' }}>{c.data.condition_type}</span>
-                      <span className="de-item-meta">→ {c.data.person_name}</span>
+                      <span className="de-item-name">{c.name}</span>
+                      <span className="de-item-badge" style={{ borderColor: '#fb7185', color: '#fb7185' }}>{c.metadata?.condition_type}</span>
                     </div>
-                    <button className="de-remove-btn" onClick={() => removeEntry(c.id)}><Trash2 size={13} /></button>
+                    <button className="de-remove-btn" onClick={() => handleDeleteRecord(c.id)}><Trash2 size={13} /></button>
                   </div>
                 ))}
               </div>
@@ -210,30 +410,23 @@ const DataEntryPane = ({ userId, entries, setEntries, onDataChange }) => {
 
         {/* ---- Medications Section ---- */}
         <div className="de-section">
-          <SectionHeader id="medications" icon={Pill} title="Medications" count={medications.length} color="#34d399" />
+          <SectionHeader id="medications" icon={Pill} title="My Medications" count={myMedications.length} color="#34d399" />
           {expandedSection === 'medications' && (
             <div className="de-section-body">
               <form onSubmit={handleAddMedication} className="de-form-row">
-                <select
-                  value={medForm.person_name}
-                  onChange={e => setMedForm(m => ({ ...m, person_name: e.target.value }))}
-                  className="de-select"
-                  required
-                >
-                  <option value="">Link to person…</option>
-                  {personNames.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
                 <input
-                  placeholder="Drug name"
+                  placeholder="e.g. Codeine, Ibuprofen"
                   value={medForm.drug_name}
                   onChange={e => setMedForm(m => ({ ...m, drug_name: e.target.value }))}
                   className="de-input"
                   required
+                  disabled={saving}
                 />
                 <select
                   value={medForm.status}
                   onChange={e => setMedForm(m => ({ ...m, status: e.target.value }))}
                   className="de-select"
+                  disabled={saving}
                 >
                   {MED_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
@@ -241,58 +434,17 @@ const DataEntryPane = ({ userId, entries, setEntries, onDataChange }) => {
                   <Plus size={14} />
                 </button>
               </form>
-              <div className="de-list">
-                {medications.map(m => (
+              <div className="de-list" style={{ marginTop: '10px' }}>
+                {myMedications.map(m => (
                   <div key={m.id} className="de-list-item">
                     <div>
-                      <span className="de-item-name">{m.data.drug_name}</span>
+                      <span className="de-item-name">{m.name}</span>
                       <span className="de-item-badge" style={{
-                        borderColor: m.data.status === 'Active' ? '#34d399' : m.data.status === 'Proposed' ? '#fbbf24' : '#6b7280',
-                        color: m.data.status === 'Active' ? '#34d399' : m.data.status === 'Proposed' ? '#fbbf24' : '#6b7280'
-                      }}>{m.data.status}</span>
-                      <span className="de-item-meta">→ {m.data.person_name}</span>
+                        borderColor: m.metadata?.status === 'Active' ? '#34d399' : m.metadata?.status === 'Proposed' ? '#fbbf24' : '#6b7280',
+                        color: m.metadata?.status === 'Active' ? '#34d399' : m.metadata?.status === 'Proposed' ? '#fbbf24' : '#6b7280'
+                      }}>{m.metadata?.status}</span>
                     </div>
-                    <button className="de-remove-btn" onClick={() => removeEntry(m.id)}><Trash2 size={13} /></button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* ---- Locations Section ---- */}
-        <div className="de-section">
-          <SectionHeader id="locations" icon={Home} title="Living Arrangements" count={locations.length} color="#fbbf24" />
-          {expandedSection === 'locations' && (
-            <div className="de-section-body">
-              <form onSubmit={handleAddLocation} className="de-form-row">
-                <input
-                  placeholder="Location name (e.g. Apartment 3B)"
-                  value={locationForm.location_name}
-                  onChange={e => setLocationForm(l => ({ ...l, location_name: e.target.value }))}
-                  className="de-input"
-                  required
-                />
-                <input
-                  placeholder="Residents (comma-separated names)"
-                  value={locationForm.residents}
-                  onChange={e => setLocationForm(l => ({ ...l, residents: e.target.value }))}
-                  className="de-input"
-                />
-                <button type="submit" className="de-add-btn" disabled={saving}>
-                  <Plus size={14} />
-                </button>
-              </form>
-              <div className="de-list">
-                {locations.map(l => (
-                  <div key={l.id} className="de-list-item">
-                    <div>
-                      <span className="de-item-name">{l.data.location_name}</span>
-                      {l.data.residents?.length > 0 && (
-                        <span className="de-item-meta">Residents: {l.data.residents.join(', ')}</span>
-                      )}
-                    </div>
-                    <button className="de-remove-btn" onClick={() => removeEntry(l.id)}><Trash2 size={13} /></button>
+                    <button className="de-remove-btn" onClick={() => handleDeleteRecord(m.id)}><Trash2 size={13} /></button>
                   </div>
                 ))}
               </div>
@@ -304,15 +456,13 @@ const DataEntryPane = ({ userId, entries, setEntries, onDataChange }) => {
       {/* Summary footer */}
       <div className="de-footer">
         <div className="de-summary">
-          <span>{people.length} people</span>
+          <span>{activeRelationships.length} connections</span>
           <span>•</span>
-          <span>{conditions.length} conditions</span>
+          <span>{myConditions.length} conditions</span>
           <span>•</span>
-          <span>{medications.length} meds</span>
-          <span>•</span>
-          <span>{locations.length} locations</span>
+          <span>{myMedications.length} meds</span>
         </div>
-        <p className="de-hint">Enter a query in the chat panel to analyze your medical graph →</p>
+        <p className="de-hint">Enter a query in the chat panel to analyze your clinical safety graph →</p>
       </div>
     </div>
   );

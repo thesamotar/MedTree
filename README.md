@@ -31,6 +31,27 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v3.0 — Consensual Cross-Account Graph & Strict Privacy (2026-07-01)
+
+**Database (`/supabase`)**
+- `migration.sql` — Total rewrite to deploy a consensual relational model:
+  - Created `profiles` table (public search/display names).
+  - Created `medical_records` table (strictly self-owned conditions/meds).
+  - Created `relationships` table (active/pending user-to-user links).
+  - Configured RLS policies: Users can only write their own records; SELECT is allowed for self or approved active links.
+  - Added full cleanup directives (dropping all old structures and wiping `auth.users` for testing).
+
+**Backend (`/backend`)**
+- `main.py` — Refactored user reasoning to query across multiple profiles and relationships:
+  - Redefined `UserData` schema with `Profile`, `MedicalRecord`, and `Relationship` models.
+  - Updated context builder to map connection UUIDs to profile names and resolve relationships.
+  - Refined graph traversal logic to highlight cross-account relative nodes and edges dynamically.
+
+**Frontend (`/frontend`)**
+- `components/DataEntryPane.js` — Redesigned into three consensual sections: My Identity Details, Consensual Links (send requests, accept/reject incoming connections), and My Health Conditions/Medications (strictly self-entered).
+- `app/page.js` — Added auto-profile-seeding on first login and parallel loaders for consensual network data.
+- `components/ChatPane.js` — Updated suggestion chip logic to scan self-owned records and active relationships.
+
 ### v2.0 — Interactive Data Entry & Supabase Auth (2026-06-30)
 
 **Backend (`/backend`)**
