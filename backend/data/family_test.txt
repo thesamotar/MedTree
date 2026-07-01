@@ -1,0 +1,53 @@
+=== Scenario Description (Unstructured Text for Cognee Ingestion) ===
+
+Abhishek is the biological son of Mamata. Mamata is the biological daughter of Nani. Nani has a severe documented genetic condition of Malignant Hyperthermia (a life-threatening reaction to certain volatile anesthetics like Sevoflurane and depolarizing muscle relaxants like Succinylcholine). Mamata is a carrier of the RYR1 gene mutation associated with Malignant Hyperthermia and has elevated risk. Abhishek is scheduled for an upcoming minor surgery where general anesthesia might be administered. Because Malignant Hyperthermia is an autosomal dominant hereditary genetic trait, Abhishek is at high risk of inheriting this life-threatening anesthetic sensitivity from his maternal grandmother Nani via his mother Mamata.
+
+Abhishek lives in Apartment 2B with his roommate Sana. Recently, Sana was diagnosed with a highly contagious, active case of pulmonary Tuberculosis (TB) and is experiencing severe chronic coughing. Because they share a small living space, close contact, and a ventilation system in Apartment 2B, Abhishek is at critical risk of exposure and latent TB infection.
+
+
+=== Structured JSON Format (For mock_data.json) ===
+
+{
+  "id": "maternal_and_roommate_test",
+  "title": "Maternal Lineage & Roommate Overlaps",
+  "description": "Abhishek is the biological son of Mamata. Mamata is the biological daughter of Nani. Nani has a severe documented history of Malignant Hyperthermia (a life-threatening reaction to volatile anesthetics like Sevoflurane). Mamata is a carrier of the RYR1 gene mutation associated with Malignant Hyperthermia. Abhishek is scheduled for surgery. Because this is an autosomal dominant hereditary trait, Abhishek is at risk. Separately, Abhishek lives with his roommate Sana at Apartment 2B. Sana was recently diagnosed with highly contagious active pulmonary Tuberculosis, putting Abhishek at high risk of exposure due to shared living space.",
+  "entities": ["Abhishek", "Mamata", "Nani", "Sana", "Apartment 2B", "Malignant Hyperthermia", "Tuberculosis"]
+}
+
+
+=== DB Schema Insertion Script (SQL) ===
+
+-- 1. Create Profiles
+INSERT INTO auth.users (id, email) VALUES 
+('aaa-aaa-aaa', 'abhishek@test.com'),
+('bbb-bbb-bbb', 'mamata@test.com'),
+('ccc-ccc-ccc', 'nani@test.com'),
+('ddd-ddd-ddd', 'sana@test.com');
+
+INSERT INTO profiles (id, full_name, age) VALUES
+('aaa-aaa-aaa', 'Abhishek', 25),
+('bbb-bbb-bbb', 'Mamata', 52),
+('ccc-ccc-ccc', 'Nani', 78),
+('ddd-ddd-ddd', 'Sana', 24);
+
+-- 2. Create Active Relationships
+-- Mamata is Mother of Abhishek (Parent-Child)
+INSERT INTO relationships (requester_id, receiver_id, relationship_type, status) 
+VALUES ('bbb-bbb-bbb', 'aaa-aaa-aaa', 'Parent-Child', 'active');
+
+-- Nani is Mother of Mamata (Parent-Child)
+INSERT INTO relationships (requester_id, receiver_id, relationship_type, status) 
+VALUES ('ccc-ccc-ccc', 'bbb-bbb-bbb', 'Parent-Child', 'active');
+
+-- Sana is roommate of Abhishek (Roommate)
+INSERT INTO relationships (requester_id, receiver_id, relationship_type, status) 
+VALUES ('ddd-ddd-ddd', 'aaa-aaa-aaa', 'Roommate', 'active');
+
+-- 3. Add Medical Records
+-- Nani has Malignant Hyperthermia
+INSERT INTO medical_records (user_id, record_type, name, metadata) 
+VALUES ('ccc-ccc-ccc', 'condition', 'Malignant Hyperthermia', '{"condition_type": "Hereditary / Genetic", "criticality": "High"}');
+
+-- Sana has Tuberculosis
+INSERT INTO medical_records (user_id, record_type, name, metadata) 
+VALUES ('ddd-ddd-ccc', 'condition', 'Active Pulmonary Tuberculosis', '{"condition_type": "Infectious / Environmental", "criticality": "Critical"}');

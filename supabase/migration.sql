@@ -68,29 +68,58 @@ ALTER TABLE relationships ENABLE ROW LEVEL SECURITY;
 
 
 -- ============================================================
--- STEP 2: Row Level Security Policies
+-- STEP 2: Helper Function for transitive connection lookups
+-- ============================================================
+-- SECURITY DEFINER bypasses RLS inside the function, avoiding infinite recursion
+-- when the relationships table's SELECT policy references itself.
+
+CREATE OR REPLACE FUNCTION get_direct_connection_ids(check_uid UUID)
+RETURNS UUID[]
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $$
+  SELECT COALESCE(array_agg(
+    CASE 
+      WHEN requester_id = check_uid THEN receiver_id
+      ELSE requester_id
+    END
+  ), '{}')
+  FROM relationships
+  WHERE status = 'active'
+  AND (requester_id = check_uid OR receiver_id = check_uid);
+$$;
+
+
+-- ============================================================
+-- STEP 3: Row Level Security Policies
 -- ============================================================
 
--- medical_records: Read own, or read records of active connections
+-- medical_records: Read own, or read records of connections (up to 2 hops)
 CREATE POLICY "Read own or connected records" ON medical_records
   FOR SELECT USING (
     auth.uid() = user_id
-    OR EXISTS (
-      SELECT 1 FROM relationships
-      WHERE status = 'active'
-      AND (
-        (requester_id = auth.uid() AND receiver_id = user_id)
-        OR (receiver_id = auth.uid() AND requester_id = user_id)
-      )
+    -- 1-hop: direct connection
+    OR user_id = ANY(get_direct_connection_ids(auth.uid()))
+    -- 2-hop: connection of a connection (e.g. Abhishek -> Mamata -> Nani)
+    OR user_id = ANY(
+      SELECT unnest(get_direct_connection_ids(conn_id))
+      FROM unnest(get_direct_connection_ids(auth.uid())) AS conn_id
     )
   );
 
 CREATE POLICY "Manage own records" ON medical_records
   FOR ALL USING (auth.uid() = user_id);
 
--- relationships
+-- relationships: View own, or if either participant is a direct connection
 CREATE POLICY "View own relationships" ON relationships
-  FOR SELECT USING (auth.uid() = requester_id OR auth.uid() = receiver_id);
+  FOR SELECT USING (
+    auth.uid() = requester_id 
+    OR auth.uid() = receiver_id
+    -- 2-hop: can see a relationship if either participant is my direct connection
+    OR requester_id = ANY(get_direct_connection_ids(auth.uid()))
+    OR receiver_id = ANY(get_direct_connection_ids(auth.uid()))
+  );
 
 CREATE POLICY "Create relationships" ON relationships
   FOR INSERT WITH CHECK (auth.uid() = requester_id);
@@ -100,7 +129,7 @@ CREATE POLICY "Update/Delete own relationships" ON relationships
 
 
 -- ============================================================
--- STEP 3: Indexes
+-- STEP 4: Indexes
 -- ============================================================
 CREATE INDEX idx_profiles_id ON profiles(id);
 CREATE INDEX idx_medical_records_user ON medical_records(user_id);

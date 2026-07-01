@@ -10,6 +10,24 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Load env before importing cognee
 load_dotenv()
 
+# If OpenAI keys are placeholder/missing but Gemini key exists, swap Cognee to Gemini provider.
+# This MUST happen before importing cognee, since cognee reads env vars at import time.
+openai_key = os.getenv("LLM_API_KEY", "")
+gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+if (not openai_key or openai_key.startswith("your-")) and gemini_key and not gemini_key.startswith("your-"):
+    os.environ["LLM_PROVIDER"] = "gemini"
+    os.environ["LLM_MODEL"] = "gemini/gemini-2.0-flash-lite"
+    os.environ["LLM_API_KEY"] = gemini_key
+    os.environ["LLM_ENDPOINT"] = "https://generativelanguage.googleapis.com/"
+    os.environ["LLM_API_VERSION"] = "v1"
+    os.environ["EMBEDDING_PROVIDER"] = "gemini"
+    os.environ["EMBEDDING_MODEL"] = "gemini/gemini-2.0-flash-lite"
+    os.environ["EMBEDDING_API_KEY"] = gemini_key
+    os.environ["EMBEDDING_ENDPOINT"] = "https://generativelanguage.googleapis.com/"
+    os.environ["EMBEDDING_API_VERSION"] = "v1"
+    print("[INFO] OpenAI key not found. Switched Cognee to Google Gemini provider.")
+
 import cognee
 from cognee.infrastructure.databases.graph import get_graph_engine
 
@@ -87,7 +105,11 @@ async def seed_data():
 
         print("\nGraph constructed successfully! Retrieving graph data...")
         graph_engine = await get_graph_engine()
-        graph_data = await graph_engine.get_graph_data()
+        raw_graph_data = await graph_engine.get_graph_data()
+        
+        # get_graph_data() returns a tuple of (nodes, edges), not a dict
+        nodes, edges = raw_graph_data
+        graph_data = {"nodes": nodes, "edges": edges}
         
         # Normalize graph_data to JSON format
         # If graph_data is empty or not in standard form, fallback to DEFAULT_GRAPH

@@ -31,6 +31,21 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v3.1 — Multi-Hop Transitive Traversal & Safe RLS Policies (2026-07-02)
+
+**Database (`/supabase`)**
+- `migration.sql` — Added `SECURITY DEFINER` helper function `get_direct_connection_ids` to retrieve relationships bypassing RLS, resolving infinite recursion/stack overflow during database SELECTs.
+- Updated `relationships` and `medical_records` SELECT policies to support 2-hop transitive consensual sharing (e.g., Grandma ↔ Mom ↔ Me) safely.
+
+**Backend (`/backend`)**
+- `main.py` — Updated `build_context_from_user_data` using BFS to compile natural language context for all connected members in the network.
+- `main.py` — Upgraded `build_traversal_path_from_user_data` to construct an adjacency graph, match clinical terms through trigger synonyms, and perform BFS shortest-path tree back-tracing to highlight multi-hop paths.
+- `seed.py` — Fixed tuple unpacking crash on `get_graph_data()` output.
+
+**Frontend (`/frontend`)**
+- `app/page.js` — Refactored `buildGraphFromEntries` using BFS transitive graph traversal to discover and render all reachable user profiles and relationship edges.
+- Synchronized edge IDs dynamically (`e_{sorted_ids}`) to guarantee matching between frontend visualization and backend path highlights.
+
 ### v3.0 — Consensual Cross-Account Graph & Strict Privacy (2026-07-01)
 
 **Database (`/supabase`)**

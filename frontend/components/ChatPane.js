@@ -121,7 +121,7 @@ const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], re
         </div>
         <div className="chat-badge">
           <Sparkles size={12} />
-          Cognee + Claude 3.5
+          Cognee + AI
         </div>
       </div>
 

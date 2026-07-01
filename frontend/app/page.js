@@ -99,57 +99,107 @@ export default function Home() {
 
     const toId = (str) => (str || '').toLowerCase().replace(/[^a-z0-9]/g, '_');
 
-    // 1. Find which profiles are active connections
+    // 1. Build a map of profiles
     const profilesMap = {};
     profs.forEach(p => {
       profilesMap[p.id] = p;
     });
 
-    const activeRelations = [];
+    // 2. Perform BFS to find all reachable profiles from currUser
+    const reachableUsers = new Set([currUser.id]);
+    const queue = [currUser.id];
+
+    while (queue.length > 0) {
+      const currentId = queue.shift();
+      rels.forEach(rel => {
+        if (rel.status === 'active') {
+          if (rel.requester_id === currentId && rel.receiver_id in profilesMap && !reachableUsers.has(rel.receiver_id)) {
+            reachableUsers.add(rel.receiver_id);
+            queue.push(rel.receiver_id);
+          } else if (rel.receiver_id === currentId && rel.requester_id in profilesMap && !reachableUsers.has(rel.requester_id)) {
+            reachableUsers.add(rel.requester_id);
+            queue.push(rel.requester_id);
+          }
+        }
+      });
+    }
+
+    // 3. Add reachable users to nodes
+    reachableUsers.forEach(uId => {
+      const uProf = profilesMap[uId];
+      if (uProf) {
+        let group = 'Relative/Connection';
+        if (uId === currUser.id) {
+          group = 'Self';
+        } else {
+          // Find direct relationship type to currUser if any, or default to Relative
+          const directRel = rels.find(rel => 
+            rel.status === 'active' && 
+            ((rel.requester_id === currUser.id && rel.receiver_id === uId) ||
+             (rel.receiver_id === currUser.id && rel.requester_id === uId))
+          );
+          if (directRel) {
+            group = directRel.relationship_type;
+          }
+        }
+
+        nodes.push({
+          id: uId,
+          label: uProf.full_name,
+          type: 'Patient',
+          group: group,
+        });
+      }
+    });
+
+    // 4. Add relationship edges between reachable users
+    const processedRels = new Set();
     rels.forEach(rel => {
-      if (rel.status === 'active') {
-        if (rel.requester_id === currUser.id && rel.receiver_id in profilesMap) {
-          activeRelations.push({ user: profilesMap[rel.receiver_id], type: rel.relationship_type });
-        } else if (rel.receiver_id === currUser.id && rel.requester_id in profilesMap) {
-          activeRelations.push({ user: profilesMap[rel.requester_id], type: rel.relationship_type });
+      if (rel.status === 'active' && reachableUsers.has(rel.requester_id) && reachableUsers.has(rel.receiver_id)) {
+        const reqProf = profilesMap[rel.requester_id];
+        const recProf = profilesMap[rel.receiver_id];
+        if (reqProf && recProf) {
+          const sortedIds = [rel.requester_id, rel.receiver_id].sort();
+          const relKey = sortedIds.join('_');
+          if (!processedRels.has(relKey)) {
+            processedRels.add(relKey);
+            
+            // Determine direction/label based on age
+            let edgeLabel = rel.relationship_type;
+            let sourceId = rel.requester_id;
+            let targetId = rel.receiver_id;
+
+            if (rel.relationship_type === 'Parent-Child') {
+              if ((reqProf.age || 0) < (recProf.age || 0)) {
+                edgeLabel = 'CHILD_OF';
+                sourceId = rel.requester_id;
+                targetId = rel.receiver_id;
+              } else {
+                edgeLabel = 'PARENT_OF';
+                sourceId = rel.receiver_id;
+                targetId = rel.requester_id;
+              }
+            } else if (rel.relationship_type === 'Roommate') {
+              edgeLabel = 'LIVES_WITH';
+            } else if (rel.relationship_type === 'Sibling-Sibling') {
+              edgeLabel = 'SIBLING_OF';
+            } else if (rel.relationship_type === 'Spouse') {
+              edgeLabel = 'SPOUSE_OF';
+            }
+
+            edges.push({
+              id: `e_${sortedIds[0]}_${sortedIds[1]}`,
+              source: sourceId,
+              target: targetId,
+              label: edgeLabel,
+            });
+          }
         }
       }
     });
 
-    // 2. Add current user node
-    const currentUserProfile = profilesMap[currUser.id];
-    if (currentUserProfile) {
-      nodes.push({
-        id: currUser.id,
-        label: currentUserProfile.full_name,
-        type: 'Patient',
-        group: 'Self',
-      });
-    }
-
-    // 3. Add active relationship user nodes and edges
-    activeRelations.forEach(rel => {
-      nodes.push({
-        id: rel.user.id,
-        label: rel.user.full_name,
-        type: 'Patient',
-        group: rel.type,
-      });
-
-      // Relationship edge
-      edges.push({
-        id: `e_${currUser.id}_${rel.user.id}`,
-        source: currUser.id,
-        target: rel.user.id,
-        label: rel.type === 'Parent-Child'
-          ? ((currentUserProfile?.age || 0) < (rel.user.age || 0) ? 'CHILD_OF' : 'PARENT_OF')
-          : rel.type === 'Roommate' ? 'LIVES_WITH' : rel.type === 'Sibling-Sibling' ? 'SIBLING_OF' : 'SPOUSE_OF',
-      });
-    });
-
-    // 4. Add medical records (Conditions and Medications)
-    const activeUserIds = new Set([currUser.id, ...activeRelations.map(r => r.user.id)]);
-    const activeRecords = records.filter(r => activeUserIds.has(r.user_id));
+    // 5. Add medical records (Conditions and Medications) for reachable users
+    const activeRecords = records.filter(r => reachableUsers.has(r.user_id));
 
     activeRecords.forEach(r => {
       const conceptId = toId(r.name);

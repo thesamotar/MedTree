@@ -6,6 +6,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import anthropic
+try:
+    from google import genai
+except ImportError:
+    genai = None
 
 # Load environment variables
 load_dotenv()
@@ -29,6 +33,15 @@ anthropic_key = os.getenv("ANTHROPIC_API_KEY")
 anthropic_client = None
 if anthropic_key and not anthropic_key.startswith("your-"):
     anthropic_client = anthropic.Anthropic(api_key=anthropic_key)
+
+# Initialize Google Gemini client (fallback when Anthropic is unavailable)
+gemini_key = os.getenv("GEMINI_API_KEY")
+gemini_client = None
+if genai and gemini_key and not gemini_key.startswith("your-"):
+    try:
+        gemini_client = genai.Client(api_key=gemini_key)
+    except Exception as e:
+        print(f"Failed to initialize Gemini client: {e}")
 
 # Fallback/Default Graph for visual demo reliability
 DEFAULT_GRAPH = {
@@ -120,54 +133,64 @@ def build_context_from_user_data(query_request: UserQueryRequest) -> str:
     if not current_user:
         return "Requester profile not found."
         
-    lines = []
-    lines.append(f"Person: {current_user.full_name} (Relationship: Self, Age: {current_user.age or 'Unknown'})")
+    # BFS to find all reachable profiles from current user
+    reachable_users = {user_id}
+    queue = [user_id]
     
-    # Logged-in user's own records
-    user_records = [r for r in user_data.medical_records if r.user_id == user_id]
-    for r in user_records:
-        if r.record_type == 'condition':
-            lines.append(f"Condition: {current_user.full_name} HAS_CONDITION -> {r.name} (Type: {r.metadata.get('condition_type', 'Chronic')})")
-        elif r.record_type == 'medication':
-            status = r.metadata.get('status', 'Active')
-            lines.append(f"Medication: {current_user.full_name} {'PRESCRIBED' if status == 'Proposed' else 'TAKES'} -> {r.name} (Status: {status})")
+    while len(queue) > 0:
+        current_id = queue.pop(0)
+        for rel in user_data.relationships:
+            if rel.status == 'active':
+                if rel.requester_id == current_id and rel.receiver_id in profiles_map and rel.receiver_id not in reachable_users:
+                    reachable_users.add(rel.receiver_id)
+                    queue.append(rel.receiver_id)
+                elif rel.receiver_id == current_id and rel.requester_id in profiles_map and rel.requester_id not in reachable_users:
+                    reachable_users.add(rel.requester_id)
+                    queue.append(rel.requester_id)
 
-    # Find active relationships and compile their records
-    active_relations = []
-    for rel in user_data.relationships:
-        if rel.status == 'active':
-            if rel.requester_id == user_id and rel.receiver_id in profiles_map:
-                active_relations.append((profiles_map[rel.receiver_id], rel.relationship_type, rel.id))
-            elif rel.receiver_id == user_id and rel.requester_id in profiles_map:
-                active_relations.append((profiles_map[rel.requester_id], rel.relationship_type, rel.id))
-
-    for rel_user, rel_type, rel_id in active_relations:
-        age_str = f", Age {rel_user.age}" if rel_user.age else ""
-        lines.append(f"Person: {rel_user.full_name} (Relationship: {rel_type}{age_str})")
+    lines = []
+    
+    # 1. Output reachable people and their medical records
+    for p_id in reachable_users:
+        p = profiles_map.get(p_id)
+        if not p:
+            continue
+        role = "Self" if p_id == user_id else "Relative/Connection"
+        age_str = f", Age: {p.age}" if p.age else ""
+        lines.append(f"Person: {p.full_name} (Role: {role}{age_str})")
         
-        # Output relational links
-        if rel_type == 'Parent-Child':
-            # Assume child is the younger one or establish hierarchy
-            if (current_user.age or 0) < (rel_user.age or 0):
-                lines.append(f"Relationship: {current_user.full_name} CHILD_OF {rel_user.full_name}")
-            else:
-                lines.append(f"Relationship: {rel_user.full_name} CHILD_OF {current_user.full_name}")
-        elif rel_type == 'Roommate':
-            lines.append(f"Relationship: {current_user.full_name} LIVES_WITH {rel_user.full_name}")
-        elif rel_type == 'Sibling-Sibling':
-            lines.append(f"Relationship: {current_user.full_name} SIBLING_OF {rel_user.full_name}")
-        elif rel_type == 'Spouse':
-            lines.append(f"Relationship: {current_user.full_name} SPOUSE_OF {rel_user.full_name}")
-
-        # Fetch records for this relative
-        rel_records = [r for r in user_data.medical_records if r.user_id == rel_user.id]
-        for r in rel_records:
+        # Medical records for this person
+        p_records = [r for r in user_data.medical_records if r.user_id == p_id]
+        for r in p_records:
             if r.record_type == 'condition':
-                lines.append(f"Condition: {rel_user.full_name} HAS_CONDITION -> {r.name} (Type: {r.metadata.get('condition_type', 'Chronic')})")
+                lines.append(f"Condition: {p.full_name} HAS_CONDITION -> {r.name} (Type: {r.metadata.get('condition_type', 'Chronic')})")
             elif r.record_type == 'medication':
                 status = r.metadata.get('status', 'Active')
-                lines.append(f"Medication: {rel_user.full_name} {'PRESCRIBED' if status == 'Proposed' else 'TAKES'} -> {r.name} (Status: {status})")
+                lines.append(f"Medication: {p.full_name} {'PRESCRIBED' if status == 'Proposed' else 'TAKES'} -> {r.name} (Status: {status})")
 
+    # 2. Output active relationships between reachable profiles
+    processed_rels = set()
+    for rel in user_data.relationships:
+        if rel.status == 'active' and rel.requester_id in reachable_users and rel.receiver_id in reachable_users:
+            req = profiles_map.get(rel.requester_id)
+            rec = profiles_map.get(rel.receiver_id)
+            if req and rec:
+                rel_key = tuple(sorted([rel.requester_id, rel.receiver_id]))
+                if rel_key not in processed_rels:
+                    processed_rels.add(rel_key)
+                    rel_type = rel.relationship_type
+                    if rel_type == 'Parent-Child':
+                        if (req.age or 0) < (rec.age or 0):
+                            lines.append(f"Relationship: {req.full_name} CHILD_OF {rec.full_name}")
+                        else:
+                            lines.append(f"Relationship: {rec.full_name} CHILD_OF {req.full_name}")
+                    elif rel_type == 'Roommate':
+                        lines.append(f"Relationship: {req.full_name} LIVES_WITH {rec.full_name}")
+                    elif rel_type == 'Sibling-Sibling':
+                        lines.append(f"Relationship: {req.full_name} SIBLING_OF {rec.full_name}")
+                    elif rel_type == 'Spouse':
+                        lines.append(f"Relationship: {req.full_name} SPOUSE_OF {rec.full_name}")
+                        
     return "\n".join(lines) if lines else "No medical data provided."
 
 def build_traversal_path_from_user_data(query_request: UserQueryRequest) -> dict:
@@ -179,84 +202,145 @@ def build_traversal_path_from_user_data(query_request: UserQueryRequest) -> dict
     import re
     to_id = lambda s: re.sub(r'[^a-z0-9_]', '', s.lower().replace(" ", "_"))
     
-    all_node_ids = set()
-    matched_node_ids = set()
-    matched_edge_ids = set()
-    
     profiles_map = {p.id: p for p in user_data.profiles}
     
-    # 1. Collect all node IDs
-    for pid in profiles_map:
-        all_node_ids.add(pid)
-    for r in user_data.medical_records:
-        all_node_ids.add(to_id(r.name))
-        
-    # Find active connections
-    active_relations = []
+    # 1. Build adjacency graph representation
+    from collections import defaultdict
+    graph = defaultdict(list)
+    edge_map = {} # Maps (node_a, node_b) -> edge_id
+    
+    # Add active relationships
     for rel in user_data.relationships:
         if rel.status == 'active':
-            if rel.requester_id == user_id and rel.receiver_id in profiles_map:
-                active_relations.append((profiles_map[rel.receiver_id], rel.relationship_type, rel.id))
-            elif rel.receiver_id == user_id and rel.requester_id in profiles_map:
-                active_relations.append((profiles_map[rel.requester_id], rel.relationship_type, rel.id))
+            u1 = rel.requester_id
+            u2 = rel.receiver_id
+            if u1 in profiles_map and u2 in profiles_map:
+                graph[u1].append(u2)
+                graph[u2].append(u1)
+                sorted_ids = sorted([u1, u2])
+                edge_id = f"e_{sorted_ids[0]}_{sorted_ids[1]}"
+                edge_map[(u1, u2)] = edge_id
+                edge_map[(u2, u1)] = edge_id
+                
+    # Add medical record connections
+    for r in user_data.medical_records:
+        pid = r.user_id
+        rec_id = to_id(r.name)
+        if pid in profiles_map:
+            graph[pid].append(rec_id)
+            graph[rec_id].append(pid)
+            edge_id = f"e_{pid}_{rec_id}"
+            edge_map[(pid, rec_id)] = edge_id
+            edge_map[(rec_id, pid)] = edge_id
 
-    # Add active relation edge IDs to help map highlights
-    active_rel_ids = {r[0].id for r in active_relations}
-
-    # 2. Check query matches
+    # 2. Find matched target nodes in query
+    matched_node_targets = set()
+    
     # Match user profile names
     for pid, prof in profiles_map.items():
         name_words = prof.full_name.lower().split()
         if any(w in query_lower for w in name_words if len(w) > 2):
-            matched_node_ids.add(pid)
-
-    # Match medical record names
+            matched_node_targets.add(pid)
+            
+    # Match medical records by name or trigger keywords
     for r in user_data.medical_records:
         rec_id = to_id(r.name)
-        words = r.name.lower().split()
-        if any(w in query_lower for w in words if len(w) > 2):
-            matched_node_ids.add(rec_id)
+        rec_name_lower = r.name.lower()
+        
+        # Simple name match
+        words = rec_name_lower.split()
+        if any(w in query_lower for w in words if len(w) > 2) or rec_name_lower in query_lower:
+            matched_node_targets.add(rec_id)
+            continue
             
-    # Traversal expansions
-    # If a person is matched, expand to their conditions/meds and links to self
-    matched_people_ids = list(matched_node_ids.intersection(profiles_map.keys()))
-    for pid in matched_people_ids:
-        # Highlight relationship edge to current user
-        if pid != user_id and pid in active_rel_ids:
-            matched_edge_ids.add(f"e_{user_id}_{pid}")
-            matched_edge_ids.add(f"e_{pid}_{user_id}")
+        # Clinical synonyms and trigger words mapping
+        triggers = []
+        if "malignant hyperthermia" in rec_name_lower:
+            triggers = ["sevoflurane", "succinylcholine", "anesthetic", "anesthesia", "surgery", "operation", "ryr1"]
+        elif "cyp2d6" in rec_name_lower:
+            triggers = ["codeine", "prodrug", "tramadol", "metabolizer"]
+        elif "psoriasis" in rec_name_lower or "arthritis" in rec_name_lower:
+            triggers = ["joints", "stiff", "rheumatology", "psoriatic"]
+        elif "mold" in rec_name_lower or "tuberculosis" in rec_name_lower or "tb" in rec_name_lower:
+            triggers = ["cough", "respiratory", "breathing", "lung", "apartment", "apartment_3b", "apartment_2b"]
             
-        # Highlight their records
-        for r in user_data.medical_records:
-            if r.user_id == pid:
-                rec_id = to_id(r.name)
-                matched_node_ids.add(rec_id)
-                matched_edge_ids.add(f"e_{pid}_{rec_id}")
+        if any(t in query_lower for t in triggers):
+            matched_node_targets.add(rec_id)
 
-    # If a medical concept is matched, highlight the user(s) associated with it
-    for r in user_data.medical_records:
-        rec_id = to_id(r.name)
-        if rec_id in matched_node_ids:
-            pid = r.user_id
-            if pid in profiles_map:
-                matched_node_ids.add(pid)
-                matched_edge_ids.add(f"e_{pid}_{rec_id}")
-                
-                # Expand to relationship edge to current user
-                if pid != user_id and pid in active_rel_ids:
-                    matched_edge_ids.add(f"e_{user_id}_{pid}")
-                    matched_edge_ids.add(f"e_{pid}_{user_id}")
+    # 3. BFS to find path from user_id to all matched targets
+    highlighted_nodes = set()
+    highlighted_edges = set()
+    
+    if user_id in graph:
+        queue = [user_id]
+        visited = {user_id: None} # node -> parent node
+        
+        head = 0
+        while head < len(queue):
+            curr = queue[head]
+            head += 1
+            for neighbor in graph[curr]:
+                if neighbor not in visited:
+                    visited[neighbor] = curr
+                    queue.append(neighbor)
+                    
+        # Trace paths back from each matched target
+        for target in matched_node_targets:
+            if target in visited:
+                curr = target
+                while curr is not None:
+                    highlighted_nodes.add(curr)
+                    parent = visited[curr]
+                    if parent is not None:
+                        edge_id = edge_map.get((parent, curr))
+                        if edge_id:
+                            highlighted_edges.add(edge_id)
+                    curr = parent
 
-    # If nothing matched, default to highlighting everything
-    if not matched_node_ids:
-        matched_node_ids = all_node_ids
-
+    # Fallback: if nothing matched/highlighted, default to highlighting all reachable nodes & edges
+    if not highlighted_nodes:
+        # If user_id is in graph, we can highlight the connected component
+        if user_id in graph:
+            queue = [user_id]
+            visited = {user_id}
+            head = 0
+            while head < len(queue):
+                curr = queue[head]
+                head += 1
+                highlighted_nodes.add(curr)
+                for neighbor in graph[curr]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+                    edge_id = edge_map.get((curr, neighbor))
+                    if edge_id:
+                        highlighted_edges.add(edge_id)
+        else:
+            # Absolute fallback: all nodes and edges in the system
+            for node in graph:
+                highlighted_nodes.add(node)
+            for edge_id in edge_map.values():
+                highlighted_edges.add(edge_id)
+            
     return {
-        "nodes": list(matched_node_ids),
-        "edges": list(matched_edge_ids)
+        "nodes": list(highlighted_nodes),
+        "edges": list(highlighted_edges)
     }
 
 
+
+# Shared system prompt for clinical reasoning (used by both Claude and Gemini)
+CLINICAL_SYSTEM_PROMPT = (
+    "You are an expert clinical decision support AI assistant. "
+    "You are given a patient's medical graph data including family relationships, "
+    "conditions, medications, and living arrangements. "
+    "Analyze the data to find hidden multi-hop medical risks. "
+    "Look for: hereditary genetic risks, drug interaction dangers, "
+    "environmental hazards shared between cohabitants, and autoimmune clustering patterns. "
+    "Respond with a clear, concise clinical alert in Markdown format. "
+    "Include: the risk found, the traversal path through relationships, "
+    "and recommended actions for a doctor."
+)
 
 @app.post("/api/analyze-user")
 async def analyze_user_query(request: UserQueryRequest):
@@ -265,45 +349,43 @@ async def analyze_user_query(request: UserQueryRequest):
     user_data = request.user_data
     
     # 1. Build context from user data
-    graph_context = build_context_from_user_data(user_data)
+    graph_context = build_context_from_user_data(request)
     
     # 2. Build traversal path
-    traversal_path = build_traversal_path_from_user_data(query, user_data)
+    traversal_path = build_traversal_path_from_user_data(request)
     
-    # 3. Call Claude for reasoning
+    # 3. Call LLM for reasoning (Claude → Gemini → Mock fallback)
     warning = ""
+    user_content = f"Clinical Query: {query}\n\nPatient Medical Graph Data:\n{graph_context}"
+    
     if anthropic_client:
         try:
-            system_prompt = (
-                "You are an expert clinical decision support AI assistant. "
-                "You are given a patient's medical graph data including family relationships, "
-                "conditions, medications, and living arrangements. "
-                "Analyze the data to find hidden multi-hop medical risks. "
-                "Look for: hereditary genetic risks, drug interaction dangers, "
-                "environmental hazards shared between cohabitants, and autoimmune clustering patterns. "
-                "Respond with a clear, concise clinical alert in Markdown format. "
-                "Include: the risk found, the traversal path through relationships, "
-                "and recommended actions for a doctor."
-            )
-            user_content = f"Clinical Query: {query}\n\nPatient Medical Graph Data:\n{graph_context}"
-            
             response = anthropic_client.messages.create(
                 model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20240620"),
                 max_tokens=1200,
-                system=system_prompt,
+                system=CLINICAL_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_content}]
             )
             warning = response.content[0].text
         except Exception as e:
             print(f"Anthropic API error: {e}")
             warning = f"### ⚠️ API Error\n\nCould not reach Claude 3.5. Error: {str(e)}\n\n---\n\n**Graph Context (raw):**\n```\n{graph_context}\n```"
+    elif gemini_client:
+        try:
+            response = gemini_client.models.generate_content(
+                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+                contents=f"{CLINICAL_SYSTEM_PROMPT}\n\n{user_content}"
+            )
+            warning = response.text
+        except Exception as e:
+            print(f"Gemini API error: {e}")
+            warning = f"### ⚠️ API Error\n\nCould not reach Gemini. Error: {str(e)}\n\n---\n\n**Graph Context (raw):**\n```\n{graph_context}\n```"
     else:
         # Fallback: return the raw context as the warning
         warning = (
             f"### ℹ️ Graph Analysis (No LLM)\n\n"
             f"**Query:** {query}\n\n"
-            f"The Anthropic API key is not configured. Below is the raw graph context "
-            f"that would be sent to Claude 3.5 for medical reasoning:\n\n"
+            f"No LLM API key is configured (Anthropic or Gemini). Below is the raw graph context:\n\n"
             f"```\n{graph_context}\n```\n\n"
             f"**Traversal:** {len(traversal_path['nodes'])} nodes and {len(traversal_path['edges'])} edges activated."
         )
@@ -378,23 +460,22 @@ async def analyze_query(request: QueryRequest):
         traversal_path = {"nodes": [], "edges": []}
         scenario_description = "General search: No specific multi-hop scenario triggered."
 
-    # 3. Call Claude 3.5 for Medical Reasoning
+    # 3. Call LLM for Medical Reasoning (Claude → Gemini → Mock fallback)
     warning = ""
+    demo_system_prompt = (
+        "You are an expert clinical decision support AI assistant. "
+        "Analyze the provided graph retrieval context and explain the hidden medical risk "
+        "and recommended actions clearly in Markdown format. Keep your response concise, "
+        "focused, and professional for an emergency room doctor."
+    )
+    user_content = f"User Request: {request.query}\n\nCognee Graph Context:\n{cognee_context}"
     
     if anthropic_client:
         try:
-            system_prompt = (
-                "You are an expert clinical decision support AI assistant. "
-                "Analyze the provided graph retrieval context and explain the hidden medical risk "
-                "and recommended actions clearly in Markdown format. Keep your response concise, "
-                "focused, and professional for an emergency room doctor."
-            )
-            user_content = f"User Request: {request.query}\n\nCognee Graph Context:\n{cognee_context}"
-            
             response = anthropic_client.messages.create(
                 model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20240620"),
                 max_tokens=1000,
-                system=system_prompt,
+                system=demo_system_prompt,
                 messages=[
                     {"role": "user", "content": user_content}
                 ]
@@ -404,10 +485,20 @@ async def analyze_query(request: QueryRequest):
         except Exception as e:
             print(f"Anthropic API call failed: {e}")
             warning = f"### [Error invoking Claude 3.5 API]\n\n{get_mock_warning(query)}"
+    elif gemini_client:
+        try:
+            response = gemini_client.models.generate_content(
+                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+                contents=f"{demo_system_prompt}\n\n{user_content}"
+            )
+            warning = response.text
+        except Exception as e:
+            print(f"Gemini API call failed: {e}")
+            warning = f"### [Error invoking Gemini API]\n\n{get_mock_warning(query)}"
     else:
         # Mock responses matching the scenarios for fallback/no-key presentations
         warning = get_mock_warning(query)
-
+    
     return {
         "warning": warning,
         "cognee_context": cognee_context,
