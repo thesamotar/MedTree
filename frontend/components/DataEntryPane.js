@@ -217,12 +217,17 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
     setExpandedSection(expandedSection === section ? null : section);
   };
 
-  const SectionHeader = ({ id, icon: Icon, title, count, color }) => (
+  const SectionHeader = ({ id, icon: Icon, title, count, pendingCount, color }) => (
     <button className="de-section-header" onClick={() => toggleSection(id)}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
         <Icon size={18} style={{ color }} />
         <span>{title}</span>
         {count !== undefined && <span className="de-count">{count}</span>}
+        {pendingCount !== undefined && pendingCount > 0 && (
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginLeft: '4px' }}>
+            Invites: ({pendingCount})
+          </span>
+        )}
       </div>
       {expandedSection === id ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
     </button>
@@ -297,7 +302,14 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
 
         {/* ---- Connections Section ---- */}
         <div className="de-section">
-          <SectionHeader id="connections" icon={UserPlus} title="Family & Connections" count={activeRelationships.length + pendingIncoming.length + pendingOutgoing.length} color="#fbbf24" />
+          <SectionHeader 
+            id="connections" 
+            icon={UserPlus} 
+            title="Family & Connections" 
+            count={activeRelationships.length} 
+            pendingCount={pendingIncoming.length + pendingOutgoing.length} 
+            color="#fbbf24" 
+          />
           {expandedSection === 'connections' && (
             <div className="de-section-body" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               {/* Send request form */}

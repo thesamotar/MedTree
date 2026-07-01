@@ -47,6 +47,7 @@ You can also use the root `package.json` shortcuts:
 - `app/page.js` — Refactored `buildGraphFromEntries` using BFS transitive graph traversal to discover and render all reachable user profiles and relationship edges.
 - `components/DataEntryPane.js` — Improved duplicate connection logic to prevent duplicate requests only when the *exact relationship type* already exists between the users.
 - `components/DataEntryPane.js` — Updated header UI to make the user age distinct with a prominent pill-style badge.
+- `components/DataEntryPane.js` — Separated "Family & Connections" counter metrics to explicitly delineate active connections vs pending unverified invites.
 - Synchronized edge IDs dynamically (`e_{sorted_ids}`) to guarantee matching between frontend visualization and backend path highlights.
 
 ### v3.0 — Consensual Cross-Account Graph & Strict Privacy (2026-07-01)
