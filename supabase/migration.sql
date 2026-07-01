@@ -124,8 +124,11 @@ CREATE POLICY "View own relationships" ON relationships
 CREATE POLICY "Create relationships" ON relationships
   FOR INSERT WITH CHECK (auth.uid() = requester_id);
 
-CREATE POLICY "Update/Delete own relationships" ON relationships
-  FOR ALL USING (auth.uid() = requester_id OR auth.uid() = receiver_id);
+CREATE POLICY "Delete own relationships" ON relationships
+  FOR DELETE USING (auth.uid() = requester_id OR auth.uid() = receiver_id);
+
+CREATE POLICY "Update own relationships" ON relationships
+  FOR UPDATE USING (auth.uid() = requester_id OR auth.uid() = receiver_id);
 
 
 -- ============================================================

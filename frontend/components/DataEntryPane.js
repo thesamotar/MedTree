@@ -103,6 +103,17 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
     const targetId = connectForm.receiver_id.trim();
     if (!targetId || targetId === userId) return;
 
+    // Prevent duplicate relationships of the SAME type
+    const exists = relationships.some(r => 
+      ((r.requester_id === userId && r.receiver_id === targetId) || 
+      (r.receiver_id === userId && r.requester_id === targetId)) &&
+      r.relationship_type === connectForm.relationship_type
+    );
+    if (exists) {
+      alert(`A ${connectForm.relationship_type} connection with this user already exists or is pending.`);
+      return;
+    }
+
     setSaving(true);
     const { error } = await supabase
       .from('relationships')
@@ -142,7 +153,10 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
       .delete()
       .eq('id', relId);
 
-    if (error) console.error('Failed to delete relationship:', error);
+    if (error) {
+      console.error('Failed to delete relationship:', error);
+      alert('Failed to delete relationship. Check browser console for details.');
+    }
     setSaving(false);
     onDataChange?.();
   };
@@ -218,9 +232,17 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
     <div className="data-entry-pane">
       {/* Header */}
       <div className="de-header">
-        <h2 className="de-title">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span>{profile?.full_name || 'My Profile'}</span>
+        <h2 className="de-title" style={{ width: '100%' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+              <span style={{ fontSize: '20px', fontWeight: 'bold' }}>{profile?.full_name || 'My Profile'}</span>
+              {profile?.age != null && (
+                <div style={{ backgroundColor: 'var(--bg-lighter)', padding: '4px 10px', borderRadius: '12px', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Age</span>
+                  <span style={{ fontSize: '15px', color: 'var(--accent-cyan)', fontWeight: 'bold' }}>{profile.age}</span>
+                </div>
+              )}
+            </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ fontSize: '11px', color: 'var(--accent-cyan)', fontWeight: 500, fontFamily: 'monospace', opacity: 0.8 }}>
                 Code: {showInviteCode ? userId : '••••••••-••••-••••-••••-••••••••••••'}
@@ -234,7 +256,6 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
             </div>
           </div>
         </h2>
-        <p className="de-subtitle">Self-own your health history and link with relatives securely.</p>
       </div>
 
       <div className="de-sections">
