@@ -31,6 +31,17 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v3.2 (INCOMPLETE) — Real-Time Cognee Live Data Processing (2026-07-02)
+
+> [!WARNING]
+> **Status: Incomplete / Failing**
+> This feature currently requires a paid OpenAI API key. The free-tier Gemini API key being used does not support the necessary LiteLLM embedding models (`text-embedding-004`) required by Cognee, resulting in a 404 error during real-time graph generation.
+
+**Backend (`/backend`)**
+- `main.py` — Refactored the `POST /api/analyze-user` endpoint to ingest dynamic Supabase JSON data directly into Cognee on the fly (`cognee.add()` and `cognee.cognify()`).
+- `main.py` — Updated the prompt builder to utilize `cognee.search(SearchType.GRAPH_COMPLETION)` instead of the manual Python BFS text representation.
+- `main.py` — Applied `os.environ` fallback logic to attempt dynamic Gemini overriding, but Litellm + Gemini embeddings fail without Google Cloud quota.
+
 ### v3.1 — Multi-Hop Transitive Traversal & Safe RLS Policies (2026-07-02)
 
 **Database (`/supabase`)**

@@ -14,6 +14,20 @@ except ImportError:
 # Load environment variables
 load_dotenv()
 
+# If OpenAI keys are placeholder/missing but Gemini key exists, swap Cognee to Gemini provider.
+# This MUST happen before importing cognee, since cognee reads env vars at import time.
+openai_key = os.getenv("LLM_API_KEY", "")
+gemini_key = os.getenv("GEMINI_API_KEY", "")
+
+if (not openai_key or openai_key.startswith("your-")) and gemini_key and not gemini_key.startswith("your-"):
+    os.environ["LLM_PROVIDER"] = "gemini"
+    os.environ["LLM_MODEL"] = "gemini/gemini-2.0-flash-lite"
+    os.environ["LLM_API_KEY"] = gemini_key
+    os.environ["EMBEDDING_PROVIDER"] = "gemini"
+    os.environ["EMBEDDING_MODEL"] = "gemini/gemini-2.0-flash-lite"
+    os.environ["EMBEDDING_API_KEY"] = gemini_key
+    print("[INFO] OpenAI key not found. Switched Cognee to Google Gemini provider in main.py.")
+
 app = FastAPI(title="MedTree Medical Correlation Engine API")
 
 # Enable CORS for Next.js frontend
@@ -351,12 +365,33 @@ async def analyze_user_query(request: UserQueryRequest):
     # 1. Build context from user data
     graph_context = build_context_from_user_data(request)
     
+    # --- COGNEE LIVE INGESTION ---
+    try:
+        import cognee
+        from cognee.api.v1.search import SearchType
+        dataset_name = f"live_user_{request.user_id}"
+        print(f"Ingesting live data into Cognee dataset: {dataset_name}")
+        await cognee.add(data=graph_context, dataset_name=dataset_name)
+        print("Running cognify on live data...")
+        await cognee.cognify()
+        print("Searching Cognee graph...")
+        results = await cognee.search(query_text=query, query_type=SearchType.GRAPH_COMPLETION)
+        
+        if results:
+            cognee_context = str(results)
+        else:
+            cognee_context = graph_context
+    except Exception as e:
+        print(f"Cognee live integration failed: {e}")
+        cognee_context = graph_context
+    # ---------------------------------
+    
     # 2. Build traversal path
     traversal_path = build_traversal_path_from_user_data(request)
     
     # 3. Call LLM for reasoning (Claude → Gemini → Mock fallback)
     warning = ""
-    user_content = f"Clinical Query: {query}\n\nPatient Medical Graph Data:\n{graph_context}"
+    user_content = f"Clinical Query: {query}\n\nPatient Medical Graph Data (via Cognee):\n{cognee_context}"
     
     if anthropic_client:
         try:
@@ -369,7 +404,7 @@ async def analyze_user_query(request: UserQueryRequest):
             warning = response.content[0].text
         except Exception as e:
             print(f"Anthropic API error: {e}")
-            warning = f"### ⚠️ API Error\n\nCould not reach Claude 3.5. Error: {str(e)}\n\n---\n\n**Graph Context (raw):**\n```\n{graph_context}\n```"
+            warning = f"### ⚠️ API Error\n\nCould not reach Claude 3.5. Error: {str(e)}\n\n---\n\n**Graph Context (via Cognee):**\n```\n{cognee_context}\n```"
     elif gemini_client:
         try:
             response = gemini_client.models.generate_content(
@@ -379,20 +414,20 @@ async def analyze_user_query(request: UserQueryRequest):
             warning = response.text
         except Exception as e:
             print(f"Gemini API error: {e}")
-            warning = f"### ⚠️ API Error\n\nCould not reach Gemini. Error: {str(e)}\n\n---\n\n**Graph Context (raw):**\n```\n{graph_context}\n```"
+            warning = f"### ⚠️ API Error\n\nCould not reach Gemini. Error: {str(e)}\n\n---\n\n**Graph Context (via Cognee):**\n```\n{cognee_context}\n```"
     else:
         # Fallback: return the raw context as the warning
         warning = (
             f"### ℹ️ Graph Analysis (No LLM)\n\n"
             f"**Query:** {query}\n\n"
             f"No LLM API key is configured (Anthropic or Gemini). Below is the raw graph context:\n\n"
-            f"```\n{graph_context}\n```\n\n"
+            f"```\n{cognee_context}\n```\n\n"
             f"**Traversal:** {len(traversal_path['nodes'])} nodes and {len(traversal_path['edges'])} edges activated."
         )
     
     return {
         "warning": warning,
-        "cognee_context": graph_context,
+        "cognee_context": cognee_context,
         "traversal_path": traversal_path,
         "scenario_description": f"User data traversal: {len(traversal_path['nodes'])} nodes, {len(traversal_path['edges'])} edges activated."
     }
