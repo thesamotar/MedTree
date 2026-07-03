@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { ReactFlow, Controls, Background } from '@xyflow/react';
+import React, { useEffect } from 'react';
+import { ReactFlow, Controls, Background, useNodesState, useEdgesState } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import CustomNode from './CustomNode';
 
@@ -8,8 +8,8 @@ const nodeTypes = {
 };
 
 const GraphPane = ({ graphData, traversalPath }) => {
-  const [nodes, setNodes] = useState([]);
-  const [edges, setEdges] = useState([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
   // Auto-layout: arrange nodes in a force-directed-like grid
   const computePositions = (rawNodes) => {
@@ -27,76 +27,67 @@ const GraphPane = ({ graphData, traversalPath }) => {
   };
 
   // Build flow nodes/edges from graphData prop
+  // Build and filter flow nodes/edges based on active traversal path
   useEffect(() => {
     if (!graphData || !graphData.nodes) return;
 
-    const positions = computePositions(graphData.nodes);
+    const highlightedNodeIds = traversalPath?.nodes || [];
+    const highlightedEdgeIds = traversalPath?.edges || [];
+    const hasHighlight = highlightedNodeIds.length > 0;
 
-    const flowNodes = graphData.nodes.map((node) => ({
+    // Filter nodes and edges to ONLY show relevant ones when pathfinding is active
+    const activeNodes = hasHighlight
+      ? graphData.nodes.filter((node) => highlightedNodeIds.includes(node.id))
+      : graphData.nodes;
+
+    const activeEdges = hasHighlight
+      ? graphData.edges.filter((edge) => highlightedEdgeIds.includes(edge.id))
+      : graphData.edges;
+
+    const positions = computePositions(activeNodes);
+
+    const flowNodes = activeNodes.map((node) => ({
       id: node.id,
       type: 'custom',
       position: positions[node.id] || { x: Math.random() * 600, y: Math.random() * 400 },
       data: {
         label: node.label,
         type: node.type,
-        highlighted: false,
+        highlighted: hasHighlight, // Glow the nodes if a path is active
       },
     }));
 
-    const flowEdges = graphData.edges.map((edge) => ({
-      id: edge.id,
-      source: edge.source,
-      target: edge.target,
-      label: edge.label,
-      type: 'default',
-      style: { stroke: '#4b5563', strokeWidth: 1.5 },
-      labelStyle: { fill: '#9ca3af', fontSize: 10, fontWeight: 500 },
-      labelBgPadding: [4, 2],
-      labelBgBorderRadius: 2,
-      labelBgStyle: { fill: '#0f172a', color: '#fff', fillOpacity: 0.8 },
-    }));
+    const flowEdges = activeEdges.map((edge) => {
+      const isHighlighted = highlightedEdgeIds.includes(edge.id);
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        label: edge.label,
+        type: 'default',
+        animated: hasHighlight,
+        className: hasHighlight ? 'highlighted-edge' : '',
+        style: hasHighlight
+          ? { stroke: '#38bdf8', strokeWidth: 4 }
+          : { stroke: '#4b5563', strokeWidth: 1.5 },
+        labelStyle: { fill: '#9ca3af', fontSize: 10, fontWeight: 500 },
+        labelBgPadding: [4, 2],
+        labelBgBorderRadius: 2,
+        labelBgStyle: { fill: '#0f172a', color: '#fff', fillOpacity: 0.8 },
+      };
+    });
 
     setNodes(flowNodes);
     setEdges(flowEdges);
-  }, [graphData]);
-
-  // Apply traversal highlighting
-  useEffect(() => {
-    if (nodes.length === 0) return;
-
-    const highlightedNodeIds = traversalPath?.nodes || [];
-    const highlightedEdgeIds = traversalPath?.edges || [];
-
-    setNodes((prev) =>
-      prev.map((node) => ({
-        ...node,
-        data: {
-          ...node.data,
-          highlighted: highlightedNodeIds.includes(node.id),
-        },
-      }))
-    );
-
-    setEdges((prev) =>
-      prev.map((edge) => {
-        const isHighlighted = highlightedEdgeIds.includes(edge.id);
-        return {
-          ...edge,
-          animated: isHighlighted,
-          className: isHighlighted ? 'highlighted-edge' : '',
-          style: isHighlighted
-            ? { stroke: '#38bdf8', strokeWidth: 4 }
-            : { stroke: '#4b5563', strokeWidth: 1.5 },
-        };
-      })
-    );
-  }, [traversalPath]);
+  }, [graphData, traversalPath]);
 
   return (
     <div style={{ width: '100%', height: '100%' }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.3 }}

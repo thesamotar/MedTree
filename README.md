@@ -31,6 +31,13 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v3.3 — Draggable Nodes, Pathway Filtering & Connection Fixes (2026-07-03)
+
+**Frontend (`/frontend`)**
+- `GraphPane.js` — Enabled draggable node states using React Flow's `useNodesState` and `useEdgesState` hooks to bind layout drag events directly.
+- `GraphPane.js` — Updated node and edge drawing to filter out all non-relevant nodes entirely when an active traversal pathway is returned, centering the visualization on the specific medical pathway.
+- `DataEntryPane.js` — Resolved a connection duplication bug where indirect secondary active relationships (e.g. Mamata ↔ Grandma) were incorrectly rendered under the current user's profile view.
+
 ### v3.2 (INCOMPLETE) — Real-Time Cognee Live Data Processing (2026-07-02)
 
 > [!WARNING]

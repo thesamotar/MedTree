@@ -55,10 +55,12 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
 
   relationships.forEach(rel => {
     if (rel.status === 'active') {
-      const relUserId = rel.requester_id === userId ? rel.receiver_id : rel.requester_id;
-      const relUser = profilesMap[relUserId];
-      if (relUser) {
-        activeRelationships.push({ rel, user: relUser });
+      if (rel.requester_id === userId || rel.receiver_id === userId) {
+        const relUserId = rel.requester_id === userId ? rel.receiver_id : rel.requester_id;
+        const relUser = profilesMap[relUserId];
+        if (relUser) {
+          activeRelationships.push({ rel, user: relUser });
+        }
       }
     } else if (rel.status === 'pending') {
       if (rel.receiver_id === userId) {
