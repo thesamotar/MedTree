@@ -275,7 +275,10 @@ const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], re
               >
                 <Brain size={32} style={{ color: '#66fcf1' }} />
               </button>
-              <h3 style={{ fontWeight: 700, fontSize: '15px', margin: '16px 0 6px 0', color: '#fff' }}>Clinical Reasoning Offline</h3>
+              <span style={{ fontSize: '11px', color: '#66fcf1', fontWeight: 700, marginTop: '10px', textTransform: 'uppercase', letterSpacing: '0.8px' }}>
+                Generate Medical Tree
+              </span>
+              <h3 style={{ fontWeight: 700, fontSize: '15px', margin: '14px 0 6px 0', color: '#fff' }}>Clinical Reasoning Offline</h3>
               <p style={{ fontSize: '12px', color: '#9ca3af', maxWidth: '300px', lineHeight: '1.5', margin: 0, padding: '0 20px', textAlign: 'center' }}>
                 Click the brain icon above to compile your family network into Cognee's semantic memory.
               </p>

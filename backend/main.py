@@ -274,11 +274,11 @@ def build_traversal_path_from_user_data(query_request: UserQueryRequest) -> dict
         # Clinical synonyms and trigger words mapping
         triggers = []
         if "malignant hyperthermia" in rec_name_lower:
-            triggers = ["sevoflurane", "succinylcholine", "anesthetic", "anesthesia", "surgery", "operation", "ryr1"]
+            triggers = ["sevoflurane", "succinylcholine", "anesthetic", "anesthesia", "surgery", "operation", "ryr1", "genetic", "hereditary", "inherited", "history", "risk"]
         elif "cyp2d6" in rec_name_lower:
-            triggers = ["codeine", "prodrug", "tramadol", "metabolizer"]
+            triggers = ["codeine", "prodrug", "tramadol", "metabolizer", "genetic", "hereditary", "inherited", "history", "risk"]
         elif "psoriasis" in rec_name_lower or "arthritis" in rec_name_lower:
-            triggers = ["joints", "stiff", "rheumatology", "psoriatic"]
+            triggers = ["joints", "stiff", "rheumatology", "psoriatic", "genetic", "hereditary", "inherited", "history", "risk"]
         elif "mold" in rec_name_lower or "tuberculosis" in rec_name_lower or "tb" in rec_name_lower:
             triggers = ["cough", "respiratory", "breathing", "lung", "apartment", "apartment_3b", "apartment_2b"]
             
