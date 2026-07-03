@@ -31,6 +31,27 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v3.5 — Incremental Ingestion, Editable Classifications, Command Palette, and Deletion Flow (2026-07-03)
+
+**Database (`/supabase`)**
+- `migration.sql` — Added `source_note_id` column to `medical_records` table with cascade delete foreign key.
+
+**Backend (`/backend`)**
+- `main.py` — Updated NLP note parsing prompt to classify extracted conditions into `Genetic`, `Autoimmune`, `Chronic`, `Symptom`, `Allergy`.
+- `main.py` — Fixed `call_llm_json` fallback mechanism to skip OpenAI path when `LLM_PROVIDER` is set to Gemini.
+- `main.py` — Added `POST /api/graph/add-facts` endpoint for incremental Cognee appending.
+- `main.py` — Added `POST /api/graph/remove-note` endpoint to clear Cognee system cache.
+
+**Frontend (`/frontend`)**
+- `ChatPane.js` — Added editable dropdown selector for condition classifications in the note approval card.
+- `ChatPane.js` — Split own-account saving from cross-account saving (saving cross-account updates as semantic facts to comply with RLS policies).
+- `ChatPane.js` — Implemented command autocomplete dropdown menu when typing `@` commands, with keyboard Arrow/Enter navigation support.
+- `ChatPane.js` & `page.js` — Restyled user clinical note command queries into custom console-style output bubbles.
+- `page.js` & `ChatPane.js` — Kept app results view active and automatically recompiled Cognee graph in the background after note deletion to prevent screen resetting.
+
+**Known Issues & Active Bugs**
+- After deleting a clinical note and rebuilding the graph, concepts like "joint stiffness" and "bilateral knee pain" are sometimes retained in Cognee's persistent memory search context.
+
 ### v3.4 — Infinite-Hop RLS Policies & On-Demand Graph Compiling (2026-07-03)
 
 **Database (`/supabase`)**

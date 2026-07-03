@@ -6,6 +6,8 @@
 -- ============================================================
 
 -- Drop v3 tables if they exist (in dependency order)
+DROP TABLE IF EXISTS semantic_facts CASCADE;
+DROP TABLE IF EXISTS clinical_notes CASCADE;
 DROP TABLE IF EXISTS relationships CASCADE;
 DROP TABLE IF EXISTS medical_records CASCADE;
 DROP TABLE IF EXISTS profiles CASCADE;
@@ -47,6 +49,7 @@ CREATE TABLE medical_records (
   record_type TEXT NOT NULL CHECK (record_type IN ('condition', 'medication')),
   name TEXT NOT NULL,
   metadata JSONB NOT NULL DEFAULT '{}',
+  source_note_id INT DEFAULT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -65,6 +68,36 @@ CREATE TABLE relationships (
 );
 
 ALTER TABLE relationships ENABLE ROW LEVEL SECURITY;
+
+
+-- 4. Clinical Notes Table
+CREATE TABLE clinical_notes (
+  id SERIAL PRIMARY KEY,
+  patient_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  author_name TEXT NOT NULL,
+  note_text TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE clinical_notes ENABLE ROW LEVEL SECURITY;
+
+
+-- 5. Semantic Facts Table
+CREATE TABLE semantic_facts (
+  id SERIAL PRIMARY KEY,
+  note_id INT REFERENCES clinical_notes(id) ON DELETE CASCADE NOT NULL,
+  patient_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  fact_text TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE semantic_facts ENABLE ROW LEVEL SECURITY;
+
+-- Add FK for source_note_id now that clinical_notes exists
+ALTER TABLE medical_records
+  ADD CONSTRAINT fk_source_note
+  FOREIGN KEY (source_note_id) REFERENCES clinical_notes(id) ON DELETE CASCADE;
 
 
 -- ============================================================
@@ -130,6 +163,34 @@ CREATE POLICY "Update own relationships" ON relationships
   FOR UPDATE USING (auth.uid() = requester_id OR auth.uid() = receiver_id);
 
 
+-- clinical_notes: Read own, or if note belongs to connected profile in network. Manage own.
+CREATE POLICY "Read own or connected notes" ON clinical_notes
+  FOR SELECT USING (
+    auth.uid() = patient_id
+    OR patient_id = ANY(get_all_connected_profile_ids(auth.uid()))
+  );
+
+CREATE POLICY "Manage own notes" ON clinical_notes
+  FOR ALL USING (
+    auth.uid() = patient_id
+    OR patient_id = ANY(get_all_connected_profile_ids(auth.uid()))
+  );
+
+
+-- semantic_facts: Read own, or if fact belongs to connected profile. Manage own.
+CREATE POLICY "Read own or connected facts" ON semantic_facts
+  FOR SELECT USING (
+    auth.uid() = patient_id
+    OR patient_id = ANY(get_all_connected_profile_ids(auth.uid()))
+  );
+
+CREATE POLICY "Manage own facts" ON semantic_facts
+  FOR ALL USING (
+    auth.uid() = patient_id
+    OR patient_id = ANY(get_all_connected_profile_ids(auth.uid()))
+  );
+
+
 -- ============================================================
 -- STEP 4: Indexes
 -- ============================================================
@@ -137,3 +198,6 @@ CREATE INDEX idx_profiles_id ON profiles(id);
 CREATE INDEX idx_medical_records_user ON medical_records(user_id);
 CREATE INDEX idx_relationships_req ON relationships(requester_id);
 CREATE INDEX idx_relationships_rec ON relationships(receiver_id);
+CREATE INDEX idx_clinical_notes_patient ON clinical_notes(patient_id);
+CREATE INDEX idx_semantic_facts_patient ON semantic_facts(patient_id);
+CREATE INDEX idx_semantic_facts_note ON semantic_facts(note_id);

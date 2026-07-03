@@ -24,6 +24,8 @@ export default function Home() {
   const [profiles, setProfiles] = useState([]);
   const [medicalRecords, setMedicalRecords] = useState([]);
   const [relationships, setRelationships] = useState([]);
+  const [clinicalNotes, setClinicalNotes] = useState([]);
+  const [semanticFacts, setSemanticFacts] = useState([]);
 
   // Traversal and Loading States
   const [traversalPath, setTraversalPath] = useState({ nodes: [], edges: [] });
@@ -65,11 +67,27 @@ export default function Home() {
       .select('*');
     setRelationships(rels || []);
 
-    // 4. Fetch all profiles to resolve names
+    // 4. Fetch clinical notes logs
+    const { data: notes } = await supabase
+      .from('clinical_notes')
+      .select('*')
+      .order('created_at', { ascending: false });
+    setClinicalNotes(notes || []);
+
+    // 5. Fetch semantic facts list
+    const { data: facts } = await supabase
+      .from('semantic_facts')
+      .select('fact_text');
+    setSemanticFacts((facts || []).map(f => f.fact_text));
+
+    // 6. Fetch all profiles to resolve names
     const { data: allProfs } = await supabase
       .from('profiles')
       .select('*');
     setProfiles(allProfs || []);
+
+    // Return fetched data so callers can use it immediately
+    return { profiles: allProfs || [], records: records || [], relationships: rels || [] };
   }, [supabase]);
 
   // Check auth on mount
@@ -260,6 +278,7 @@ export default function Home() {
           profiles: profiles,
           medical_records: medicalRecords,
           relationships: relationships,
+          semantic_facts: semanticFacts,
         },
       };
 
@@ -315,6 +334,7 @@ export default function Home() {
           profiles: profiles,
           medical_records: medicalRecords,
           relationships: relationships,
+          semantic_facts: semanticFacts,
         },
       };
 
@@ -390,9 +410,13 @@ export default function Home() {
               profiles={profiles}
               medicalRecords={medicalRecords}
               relationships={relationships}
-              onDataChange={() => {
-                loadAllData(user);
-                setIsGraphBuilt(false); // Force rebuild when database records change
+              clinicalNotes={clinicalNotes}
+              onDataChange={async () => {
+                const data = await loadAllData(user);
+                // Rebuild local graph in-place from refreshed data
+                const fullGraph = buildGraphFromEntries(data.profiles, data.records, data.relationships, user);
+                setGraphData(fullGraph);
+                setIsGraphBuilt(false); // Force rebuild when database records change from DataEntry
               }}
               onBuildGraph={handleBuildGraph}
               isBuildingGraph={isBuildingGraph}
@@ -418,6 +442,17 @@ export default function Home() {
             isGraphBuilt={isGraphBuilt}
             isBuildingGraph={isBuildingGraph}
             onBuildGraph={handleBuildGraph}
+            onDataChange={async () => {
+              const data = await loadAllData(user);
+              // Rebuild local graph in-place from refreshed data (keep results view)
+              if (appState === 'results') {
+                const fullGraph = buildGraphFromEntries(data.profiles, data.records, data.relationships, user);
+                setGraphData(fullGraph);
+                // Don't reset isGraphBuilt — Cognee graph is updated incrementally by the approval card
+              } else {
+                setIsGraphBuilt(false);
+              }
+            }}
           />
         </div>
       </div>

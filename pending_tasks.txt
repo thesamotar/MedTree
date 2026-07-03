@@ -1,0 +1,41 @@
+========================================================================
+                     MEDTREE PENDING TASKS & ACTIVE BUGS
+========================================================================
+
+Here is the list of pending tasks, active bugs, and features to be addressed in the next phase of MedTree development.
+
+------------------------------------------------------------------------
+1. [BUG] COGNEE CONCEPT RETENTION AFTER NOTE DELETION
+------------------------------------------------------------------------
+* Description: After using `@remove_clinical_note` to delete a note, the Cognee graph is pruned and compiled from the remaining notes. However, previously extracted concepts (such as "joint stiffness" and "bilateral knee pain") are still returned in context when queries are executed.
+* Priority: High
+* Action Items:
+  - Investigate why `cognee.prune.prune_data()` or `cognee.prune.prune_system()` does not fully flush the vector/graph nodes index inside LanceDB/SQLite.
+  - Verify if cached embeddings are being kept in memory or if transaction logs are not committing the deletion cleanly.
+  - Add explicit verification steps to check if data files under `~/.cognee_system/` are cleared when prune is executed.
+
+------------------------------------------------------------------------
+2. [FEATURE] LOCAL TRANSFORMATOR EMBEDDING FALLBACK FOR GEMINI FREE-TIER
+------------------------------------------------------------------------
+* Description: The current Cognee live pipeline requires a paid OpenAI API key or a paid Gemini Enterprise key to leverage the `text-embedding-004` embedding model. Free-tier Gemini keys fail to run embedding requests due to quota/model restrictions.
+* Priority: Medium
+* Action Items:
+  - Implement a local SentenceTransformer model fallback (e.g. `all-MiniLM-L6-v2`) in `main.py` using HuggingFace.
+  - Patch LiteLLM / Cognee configurations to route embedding calls to the local fallback when LLM keys are absent, making the application 100% self-contained and free-tier compliant.
+
+------------------------------------------------------------------------
+3. [UX] GRAPH COORDINATE PERSISTENCE
+------------------------------------------------------------------------
+* Description: Draggability has been successfully enabled on React Flow nodes, allowing the user to move nodes around. However, whenever the graph recompiles or the data changes, node positions are reset to the default layout coordinates.
+* Priority: Low
+* Action Items:
+  - Store dragged node coordinates in browser `localStorage` or save them to a `node_coordinates` table in Supabase.
+  - Retrieve and apply stored coordinates when loading the graph in `GraphPane.js`.
+
+------------------------------------------------------------------------
+4. [SECURITY] CONSENSUAL LINK PRIVACY BOUNDS
+------------------------------------------------------------------------
+* Description: The current Supabase relationship policies allow either participant of a connection to write relationship updates.
+* Priority: Medium
+* Action Items:
+  - Restrict RLS policies so that only the receiving user can approve or transition a pending relationship to "active" status, preventing malicious or self-consent updates.

@@ -8,12 +8,51 @@ const RELATIONSHIP_TYPES = ['Parent-Child', 'Roommate', 'Sibling-Sibling', 'Spou
 const CONDITION_TYPES = ['Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy'];
 const MED_STATUSES = ['Active', 'Proposed', 'Discontinued'];
 
-const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationships, onDataChange, onBuildGraph, isBuildingGraph, isGraphBuilt }) => {
+const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationships, clinicalNotes = [], onDataChange, onBuildGraph, isBuildingGraph, isGraphBuilt }) => {
   const supabase = createClient();
   const [expandedSection, setExpandedSection] = useState('profile');
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showInviteCode, setShowInviteCode] = useState(false);
+  
+  const [selectedNote, setSelectedNote] = useState(null);
+  const [noteFacts, setNoteFacts] = useState([]);
+  const [loadingFacts, setLoadingFacts] = useState(false);
+
+  const handleViewNoteDetails = async (note) => {
+    setSelectedNote(note);
+    setLoadingFacts(true);
+    try {
+      const { data: facts, error } = await supabase
+        .from('semantic_facts')
+        .select('*')
+        .eq('note_id', note.id);
+        
+      if (error) throw error;
+      setNoteFacts(facts || []);
+    } catch (err) {
+      console.error("Failed to load semantic facts:", err);
+      setNoteFacts([]);
+    } finally {
+      setLoadingFacts(false);
+    }
+  };
+
+  const handleDeleteNote = async (noteId) => {
+    if (!window.confirm(`Are you sure you want to delete Clinical Note ID ${noteId}?`)) return;
+    try {
+      const { error } = await supabase
+        .from('clinical_notes')
+        .delete()
+        .eq('id', noteId);
+        
+      if (error) throw error;
+      if (onDataChange) onDataChange();
+    } catch (err) {
+      console.error("Failed to delete note:", err);
+      alert("Failed to delete note.");
+    }
+  };
 
   // ---------- Form states ----------
   const [profileForm, setProfileForm] = useState({
@@ -496,7 +535,154 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
             </div>
           )}
         </div>
+
+        {/* ---- Clinical Notes Section ---- */}
+        <div className="de-section">
+          <SectionHeader id="notes" icon={Brain} title="Clinical Note Logs" count={clinicalNotes.length} color="#a78bfa" />
+          {expandedSection === 'notes' && (
+            <div className="de-section-body">
+              <div className="de-list">
+                {clinicalNotes.length === 0 ? (
+                  <p style={{ fontSize: '11px', color: '#9ca3af', textAlign: 'center', padding: '12px 0', margin: 0 }}>
+                    No clinical notes recorded yet.
+                  </p>
+                ) : (
+                  clinicalNotes.map(note => (
+                    <div 
+                      key={note.id} 
+                      className="de-list-item" 
+                      onClick={() => handleViewNoteDetails(note)}
+                      style={{ cursor: 'pointer', transition: 'background 0.2s', padding: '8px 10px' }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', width: 'calc(100% - 24px)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span style={{ fontSize: '10px', color: '#a78bfa', fontWeight: 700 }}>ID: #{note.id}</span>
+                          <span style={{ fontSize: '9px', color: '#9ca3af' }}>{new Date(note.created_at).toLocaleDateString()}</span>
+                        </div>
+                        <span className="de-item-name" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', width: '100%', display: 'block', fontSize: '12px' }}>
+                          {note.author_name}: "{note.summary}"
+                        </span>
+                      </div>
+                      <button 
+                        className="de-remove-btn" 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteNote(note.id);
+                        }}
+                        style={{ alignSelf: 'center' }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* Clinical Note Details Modal */}
+      {selectedNote && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)',
+          zIndex: 1000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          backdropFilter: 'blur(4px)',
+          padding: '20px'
+        }}>
+          <div style={{
+            background: '#0d1117',
+            border: '1px solid #1e293b',
+            borderRadius: '8px',
+            padding: '20px',
+            width: '100%',
+            maxWidth: '460px',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
+            position: 'relative'
+          }}>
+            <button 
+              onClick={() => setSelectedNote(null)}
+              style={{
+                position: 'absolute',
+                top: '12px',
+                right: '12px',
+                background: 'none',
+                border: 'none',
+                color: '#9ca3af',
+                cursor: 'pointer'
+              }}
+            >
+              <X size={18} />
+            </button>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px' }}>
+              <Brain size={18} style={{ color: '#a78bfa' }} />
+              <h3 style={{ fontSize: '14px', fontWeight: 700, color: '#fff', margin: 0, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Clinical Note Details
+              </h3>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: '#9ca3af' }}>
+                <span><strong>ID:</strong> #{selectedNote.id}</span>
+                <span>•</span>
+                <span><strong>Date:</strong> {new Date(selectedNote.created_at).toLocaleDateString()}</span>
+                <span>•</span>
+                <span><strong>Author:</strong> {selectedNote.author_name}</span>
+              </div>
+
+              <div style={{ padding: '10px', background: 'rgba(255,255,255,0.02)', border: '1px solid #233145', borderRadius: '4px' }}>
+                <strong style={{ fontSize: '10px', color: '#a78bfa', display: 'block', marginBottom: '4px', letterSpacing: '0.5px' }}>ORIGINAL TEXT:</strong>
+                <p style={{ fontSize: '12px', color: '#e5e7eb', margin: 0, lineHeight: '1.4' }}>
+                  {selectedNote.note_text}
+                </p>
+              </div>
+
+              <div style={{ padding: '10px', background: 'rgba(255,255,255,0.02)', border: '1px solid #233145', borderRadius: '4px' }}>
+                <strong style={{ fontSize: '10px', color: '#34d399', display: 'block', marginBottom: '6px', letterSpacing: '0.5px' }}>EXTRACTED SEMANTIC FACTS:</strong>
+                {loadingFacts ? (
+                  <div style={{ color: '#9ca3af', fontSize: '11px' }}>Loading semantic facts...</div>
+                ) : noteFacts.length === 0 ? (
+                  <div style={{ color: '#9ca3af', fontSize: '11px' }}>No semantic facts stored for this note.</div>
+                ) : (
+                  <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '11px', color: '#e5e7eb', display: 'flex', flexDirection: 'column', gap: '4px', lineHeight: '1.3' }}>
+                    {noteFacts.map((fact, idx) => (
+                      <li key={idx}>{fact.fact_text}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+
+            <button 
+              onClick={() => setSelectedNote(null)}
+              style={{
+                width: '100%',
+                padding: '8px',
+                background: '#1f2833',
+                border: '1px solid #4b5563',
+                color: '#fff',
+                borderRadius: '4px',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              Close Details
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Summary footer */}
       <div className="de-footer">

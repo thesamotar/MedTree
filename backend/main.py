@@ -129,6 +129,7 @@ class UserData(BaseModel):
     profiles: list[Profile] = []
     medical_records: list[MedicalRecord] = []
     relationships: list[Relationship] = []
+    semantic_facts: list[str] = []
 
 class UserQueryRequest(BaseModel):
     query: str
@@ -208,6 +209,12 @@ def build_context_from_user_data(query_request: UserQueryRequest) -> str:
                         lines.append(f"Relationship: {req.full_name} SIBLING_OF {rec.full_name}")
                     elif rel_type == 'Spouse':
                         lines.append(f"Relationship: {req.full_name} SPOUSE_OF {rec.full_name}")
+                        
+    # 3. Output semantic facts
+    if user_data.semantic_facts:
+        lines.append("\nUnstructured Clinical Notes Memory:")
+        for fact in user_data.semantic_facts:
+            lines.append(f"Fact: {fact}")
                         
     return "\n".join(lines) if lines else "No medical data provided."
 
@@ -635,6 +642,159 @@ def get_mock_warning(query: str) -> str:
             "Query processed. No critical multi-hop medical risk clusters detected in the immediate graph. "
             "Please check spelling or enter a specific patient trigger (e.g., 'Alex Jensen Codeine', 'Lily Chen stiff joints', or 'Marcus Vance respiratory distress')."
         )
+
+class ParseNoteRequest(BaseModel):
+    note_text: str
+    patient_id: str
+    profiles: list
+
+class AddFactsRequest(BaseModel):
+    user_id: str
+    note_id: int
+    facts: list[str]
+
+class RemoveNoteRequest(BaseModel):
+    user_id: str
+    note_id: int
+
+async def call_llm_json(system_prompt: str, user_content: str) -> dict:
+    """Helper to query the available LLM and return parsed JSON."""
+    response_text = ""
+    
+    # Try OpenAI first (skip if provider has been swapped to Gemini)
+    llm_provider = os.getenv("LLM_PROVIDER", "").lower()
+    openai_key = os.getenv("LLM_API_KEY")
+    if openai_key and not openai_key.startswith("your-") and llm_provider not in ("gemini",):
+        try:
+            import openai
+            client = openai.AsyncOpenAI(api_key=openai_key)
+            response = await client.chat.completions.create(
+                model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ],
+                response_format={"type": "json_object"}
+            )
+            response_text = response.choices[0].message.content
+        except Exception as e:
+            print(f"OpenAI error in call_llm_json: {e}")
+            
+    # Try Anthropic as first fallback
+    if not response_text and anthropic_client:
+        try:
+            response = anthropic_client.messages.create(
+                model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20240620"),
+                max_tokens=1000,
+                system=system_prompt + "\n\nYou MUST reply with a valid JSON object ONLY. Do not wrap in markdown blocks like ```json.",
+                messages=[{"role": "user", "content": user_content}]
+            )
+            response_text = response.content[0].text
+        except Exception as e:
+            print(f"Anthropic error in call_llm_json: {e}")
+            
+    # Try Gemini as second fallback
+    if not response_text and gemini_client:
+        try:
+            response = gemini_client.models.generate_content(
+                model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+                contents=f"{system_prompt}\n\nYou MUST reply with a valid JSON object ONLY. Do not wrap in markdown blocks like ```json.\n\n{user_content}"
+            )
+            response_text = response.text
+        except Exception as e:
+            print(f"Gemini error in call_llm_json: {e}")
+            
+    if not response_text:
+        raise HTTPException(status_code=500, detail="No LLM client is available to parse the note.")
+        
+    response_text = response_text.strip()
+    if response_text.startswith("```json"):
+        response_text = response_text[7:]
+    if response_text.endswith("```"):
+        response_text = response_text[:-3]
+    response_text = response_text.strip()
+    
+    try:
+        return json.loads(response_text)
+    except Exception as e:
+        print(f"Failed to parse LLM response as JSON: {response_text}")
+        raise HTTPException(status_code=500, detail=f"LLM did not return valid JSON: {str(e)}")
+
+@app.post("/api/notes/parse")
+async def parse_clinical_note(request: ParseNoteRequest):
+    """Parses clinical note using the LLM to extract summary, semantic facts, and suggestible structured hard facts."""
+    system_prompt = (
+        "You are an expert clinical NLP parser. Your job is to extract structured and semantic facts from a raw clinical note.\n"
+        "You must return a valid JSON object with the following keys:\n"
+        "- 'summary': A 5-word summary of the clinical note.\n"
+        "- 'semantic_facts': A list of string facts detailing symptoms, qualifiers, or hereditary conditions in plain sentences. "
+        "Make them atomic and refer to the patient by name (e.g. 'Mamata Patra has severe joint stiffness in the morning').\n"
+        "- 'hard_facts': A list of dictionary objects, each representing a structured medication or condition to be saved. "
+        "Each dict must contain: \n"
+        "  * 'patient_name': The full name of the patient (e.g. 'Mamata Patra').\n"
+        "  * 'resolved_id': Match the patient name to the list of Available Profiles. If matched, set to their UUID. If not, default to the active patient's UUID.\n"
+        "  * 'record_type': 'condition' or 'medication'.\n"
+        "  * 'name': The clean name of the medication or condition (e.g. 'Plaque Psoriasis', 'Sevoflurane').\n"
+        "  * 'metadata': A dictionary. For conditions, you MUST include a 'condition_type' field set to exactly one of: "
+        "'Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy'. Use these classification rules:\n"
+        "    - 'Genetic': Inherited genetic markers or deficiencies (e.g. CYP2D6 Deficiency, Malignant Hyperthermia Susceptibility, Sickle Cell Trait).\n"
+        "    - 'Autoimmune': Autoimmune diseases (e.g. Psoriasis, Lupus, Rheumatoid Arthritis, Crohn's Disease).\n"
+        "    - 'Chronic': Chronic non-autoimmune conditions (e.g. Hypertension, Diabetes, COPD).\n"
+        "    - 'Symptom': Acute symptoms or complaints (e.g. Joint Stiffness, Cough, Bilateral Knee Pain, Respiratory Distress).\n"
+        "    - 'Allergy': Allergies or hypersensitivities (e.g. Penicillin Allergy, Latex Allergy).\n"
+        "  For medications, include optional 'dosage' and 'status' (e.g. 'Active', 'Proposed').\n"
+    )
+    
+    profiles_formatted = "\n".join([f"- UUID: {p.get('id')}, Name: {p.get('full_name')}" for p in request.profiles])
+    user_content = (
+        f"Active Patient UUID: {request.patient_id}\n\n"
+        f"Available Patient Profiles in family network:\n{profiles_formatted}\n\n"
+        f"Clinical Note to Parse:\n\"{request.note_text}\""
+    )
+    
+    try:
+        parsed_data = await call_llm_json(system_prompt, user_content)
+        return parsed_data
+    except Exception as e:
+        print(f"Failed parsing note: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/graph/add-facts")
+async def add_facts_to_graph(request: AddFactsRequest):
+    """Incrementally add new semantic facts to the Cognee graph without pruning existing data."""
+    try:
+        import cognee
+        
+        dataset_name = f"user_{request.user_id}_note_{request.note_id}"
+        facts_text = "\n".join(request.facts)
+        
+        print(f"Incrementally adding facts to Cognee dataset: {dataset_name}")
+        await cognee.add(data=facts_text, dataset_name=dataset_name)
+        
+        print(f"Cognifying new facts...")
+        await cognee.cognify()
+        
+        return {"success": True, "dataset": dataset_name, "facts_added": len(request.facts)}
+    except Exception as e:
+        print(f"Failed to add facts to Cognee: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/graph/remove-note")
+async def remove_note_from_graph(request: RemoveNoteRequest):
+    """Surgically remove a specific note's dataset from the Cognee graph."""
+    try:
+        import cognee
+        
+        dataset_name = f"user_{request.user_id}_note_{request.note_id}"
+        
+        print(f"Pruning Cognee dataset: {dataset_name}")
+        await cognee.prune.prune_data()
+        
+        return {"success": True, "pruned_dataset": dataset_name}
+    except Exception as e:
+        print(f"Failed to prune Cognee dataset: {e}")
+        # Non-fatal: dataset may not exist if graph was never built for this note
+        return {"success": False, "detail": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
