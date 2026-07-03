@@ -41,8 +41,10 @@ You can also use the root `package.json` shortcuts:
 - `main.py` — Optimized the `/api/analyze-user` endpoint to run only `cognee.search()`, reducing chat query response time down to milliseconds.
 
 **Frontend (`/frontend`)**
-- `page.js` & `DataEntryPane.js` — Introduced the "Generate Medical Tree" compile workflow. 
-- `ChatPane.js` — Implemented a glassmorphic blurred overlay lock screen that restricts chat analysis until Cognee has synthesized the semantic graph.
+- `page.js` & `ChatPane.js` — Placed the graph build action as a glowing circular brain button at the center of the Chat lock screen overlay.
+- `ChatPane.js` — Integrated an interactive progression bar that updates live with Cognee's compilation tasks (clearing cache, ingesting records, cognifying).
+- `GraphPane.js` — Implemented an initial-state view when no query is active, displaying only the logged-in patient and their direct medical/prescriptive nodes.
+- `GraphPane.js` & `globals.css` — Color-coded relationships (Orange), medical conditions (Purple), and medications (Green) with custom glowing path animation overrides.
 
 ### v3.3 — Draggable Nodes, Pathway Filtering & Connection Fixes (2026-07-03)
 

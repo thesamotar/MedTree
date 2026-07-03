@@ -400,7 +400,7 @@ export default function Home() {
             />
           ) : (
             <div className="graph-section">
-              <GraphPane graphData={graphData} traversalPath={traversalPath} />
+              <GraphPane graphData={graphData} traversalPath={traversalPath} userId={user?.id} />
             </div>
           )}
         </div>
@@ -416,6 +416,8 @@ export default function Home() {
             appState={appState}
             user={user}
             isGraphBuilt={isGraphBuilt}
+            isBuildingGraph={isBuildingGraph}
+            onBuildGraph={handleBuildGraph}
           />
         </div>
       </div>

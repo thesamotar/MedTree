@@ -37,10 +37,47 @@ const renderMarkdown = (text) => {
   });
 };
 
-const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], relationships = [], appState, user, isGraphBuilt }) => {
+const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], relationships = [], appState, user, isGraphBuilt, isBuildingGraph, onBuildGraph }) => {
   const [query, setQuery] = useState('');
   const [history, setHistory] = useState([]);
   const messagesEndRef = useRef(null);
+  const [progress, setProgress] = useState(0);
+  const [loadingStep, setLoadingStep] = useState('');
+
+  // Simulate progress steps for Cognee graph synthesis
+  useEffect(() => {
+    let interval;
+    if (isBuildingGraph) {
+      setProgress(5);
+      setLoadingStep('Clearing previous session cache...');
+      
+      interval = setInterval(() => {
+        setProgress((prev) => {
+          if (prev >= 95) {
+            clearInterval(interval);
+            return 95;
+          }
+          const nextVal = prev + Math.floor(Math.random() * 8) + 2;
+          
+          if (nextVal < 25) {
+            setLoadingStep('Clearing previous session cache...');
+          } else if (nextVal < 60) {
+            setLoadingStep('Ingesting Supabase patient records...');
+          } else if (nextVal < 85) {
+            setLoadingStep('Running Cognee graph reasoning engine...');
+          } else {
+            setLoadingStep('Synthesizing semantic nodes and edges...');
+          }
+          
+          return nextVal > 95 ? 95 : nextVal;
+        });
+      }, 600);
+    } else {
+      setProgress(0);
+      setLoadingStep('');
+    }
+    return () => clearInterval(interval);
+  }, [isBuildingGraph]);
 
   // Build dynamic suggestion chips from user's data
   const suggestions = React.useMemo(() => {
@@ -213,11 +250,37 @@ const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], re
       {/* Glassmorphic lock screen overlay when graph has not been synthesized */}
       {!isGraphBuilt && (
         <div className="chat-lock-overlay">
-          <Brain size={36} className="pulse-icon" style={{ color: '#66fcf1', marginBottom: '14px' }} />
-          <h3 style={{ fontWeight: 700, fontSize: '16px', margin: '0 0 8px 0', color: '#fff' }}>Clinical Reasoning Offline</h3>
-          <p style={{ fontSize: '12px', color: '#9ca3af', maxWidth: '300px', lineHeight: '1.5', margin: 0 }}>
-            Generate the medical tree first to compile your patient network into Cognee's semantic brain.
-          </p>
+          {isBuildingGraph ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', maxWidth: '280px' }}>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', width: '80px', height: '80px', borderRadius: '50%', background: '#0d1117', border: '2px solid #2b3a4a', marginBottom: '14px' }}>
+                <Brain size={32} className="pulse-icon" style={{ color: '#66fcf1' }} />
+              </div>
+              <h3 style={{ fontWeight: 700, fontSize: '15px', margin: '0 0 4px 0', color: '#fff' }}>Synthesizing Graph...</h3>
+              
+              {/* Progress bar */}
+              <div style={{ width: '100%', height: '6px', backgroundColor: '#1f2833', borderRadius: '3px', overflow: 'hidden', margin: '10px 0 8px 0' }}>
+                <div style={{ width: `${progress}%`, height: '100%', backgroundColor: '#66fcf1', transition: 'width 0.4s ease' }} />
+              </div>
+              
+              <p style={{ fontSize: '11px', color: '#9ca3af', minHeight: '16px', margin: 0, textAlign: 'center' }}>
+                {loadingStep} ({progress}%)
+              </p>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <button 
+                onClick={onBuildGraph}
+                className="circular-build-btn"
+                title="Generate Medical Tree"
+              >
+                <Brain size={32} style={{ color: '#66fcf1' }} />
+              </button>
+              <h3 style={{ fontWeight: 700, fontSize: '15px', margin: '16px 0 6px 0', color: '#fff' }}>Clinical Reasoning Offline</h3>
+              <p style={{ fontSize: '12px', color: '#9ca3af', maxWidth: '300px', lineHeight: '1.5', margin: 0, padding: '0 20px', textAlign: 'center' }}>
+                Click the brain icon above to compile your family network into Cognee's semantic memory.
+              </p>
+            </div>
+          )}
         </div>
       )}
 

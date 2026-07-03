@@ -499,20 +499,7 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
       </div>
 
       {/* Summary footer */}
-      <div className="de-footer" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        <button
-          className="de-generate-btn"
-          onClick={onBuildGraph}
-          disabled={isBuildingGraph}
-        >
-          <Brain size={16} className={isBuildingGraph ? "pulse-icon" : ""} />
-          {isBuildingGraph 
-            ? 'Synthesizing Cognee Graph...' 
-            : isGraphBuilt 
-              ? 'Regenerate Medical Tree' 
-              : 'Generate Medical Tree'
-          }
-        </button>
+      <div className="de-footer">
         <div className="de-summary">
           <span>{activeRelationships.length} connections</span>
           <span>•</span>
@@ -523,7 +510,7 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
         <p className="de-hint">
           {isGraphBuilt 
             ? "Graph successfully synthesized in Cognee! Enter a query in the chat →" 
-            : "Click 'Generate Medical Tree' to compile your database entries into Cognee."
+            : "Generate your medical tree in the chat panel to compile Cognee's brain."
           }
         </p>
       </div>
