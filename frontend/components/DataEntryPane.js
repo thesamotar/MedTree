@@ -2,13 +2,13 @@
 
 import React, { useState } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import { User, UserPlus, HeartPulse, Pill, Home, Plus, Trash2, ChevronDown, ChevronRight, Copy, Check, X, Eye, EyeOff } from 'lucide-react';
+import { User, UserPlus, HeartPulse, Pill, Home, Plus, Trash2, ChevronDown, ChevronRight, Copy, Check, X, Eye, EyeOff, Brain } from 'lucide-react';
 
 const RELATIONSHIP_TYPES = ['Parent-Child', 'Roommate', 'Sibling-Sibling', 'Spouse'];
 const CONDITION_TYPES = ['Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy'];
 const MED_STATUSES = ['Active', 'Proposed', 'Discontinued'];
 
-const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationships, onDataChange }) => {
+const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationships, onDataChange, onBuildGraph, isBuildingGraph, isGraphBuilt }) => {
   const supabase = createClient();
   const [expandedSection, setExpandedSection] = useState('profile');
   const [saving, setSaving] = useState(false);
@@ -499,7 +499,20 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
       </div>
 
       {/* Summary footer */}
-      <div className="de-footer">
+      <div className="de-footer" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <button
+          className="de-generate-btn"
+          onClick={onBuildGraph}
+          disabled={isBuildingGraph}
+        >
+          <Brain size={16} className={isBuildingGraph ? "pulse-icon" : ""} />
+          {isBuildingGraph 
+            ? 'Synthesizing Cognee Graph...' 
+            : isGraphBuilt 
+              ? 'Regenerate Medical Tree' 
+              : 'Generate Medical Tree'
+          }
+        </button>
         <div className="de-summary">
           <span>{activeRelationships.length} connections</span>
           <span>•</span>
@@ -507,7 +520,12 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
           <span>•</span>
           <span>{myMedications.length} meds</span>
         </div>
-        <p className="de-hint">Enter a query in the chat panel to analyze your clinical safety graph →</p>
+        <p className="de-hint">
+          {isGraphBuilt 
+            ? "Graph successfully synthesized in Cognee! Enter a query in the chat →" 
+            : "Click 'Generate Medical Tree' to compile your database entries into Cognee."
+          }
+        </p>
       </div>
     </div>
   );

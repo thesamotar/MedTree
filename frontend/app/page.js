@@ -29,6 +29,8 @@ export default function Home() {
   const [traversalPath, setTraversalPath] = useState({ nodes: [], edges: [] });
   const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
   const [isLoading, setIsLoading] = useState(false);
+  const [isGraphBuilt, setIsGraphBuilt] = useState(false);
+  const [isBuildingGraph, setIsBuildingGraph] = useState(false);
 
   // Load all user and connection data
   const loadAllData = useCallback(async (currUser) => {
@@ -261,7 +263,8 @@ export default function Home() {
         },
       };
 
-      const res = await fetch('http://localhost:8000/api/analyze-user', {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${apiUrl}/api/analyze-user`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -301,6 +304,47 @@ export default function Home() {
   const handleBackToEntry = () => {
     setAppState('entry');
     setTraversalPath({ nodes: [], edges: [] });
+  };
+
+  const handleBuildGraph = async () => {
+    setIsBuildingGraph(true);
+    try {
+      const payload = {
+        user_id: user.id,
+        user_data: {
+          profiles: profiles,
+          medical_records: medicalRecords,
+          relationships: relationships,
+        },
+      };
+
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${apiUrl}/api/build-graph`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error('Backend error');
+      const data = await res.json();
+      
+      // If Cognee successfully returns visual nodes, render them
+      // Otherwise fall back to building the local layout representation
+      if (data.nodes && data.nodes.length > 0) {
+        setGraphData({ nodes: data.nodes, edges: data.edges });
+      } else {
+        const fullGraph = buildGraphFromEntries(profiles, medicalRecords, relationships, user);
+        setGraphData(fullGraph);
+      }
+      
+      setIsGraphBuilt(true);
+      setAppState('results');
+    } catch (err) {
+      console.error('Failed to build graph:', err);
+      alert('Failed to construct Cognee graph. Check that your backend is running.');
+    } finally {
+      setIsBuildingGraph(false);
+    }
   };
 
   if (authLoading) {
@@ -346,7 +390,13 @@ export default function Home() {
               profiles={profiles}
               medicalRecords={medicalRecords}
               relationships={relationships}
-              onDataChange={() => loadAllData(user)}
+              onDataChange={() => {
+                loadAllData(user);
+                setIsGraphBuilt(false); // Force rebuild when database records change
+              }}
+              onBuildGraph={handleBuildGraph}
+              isBuildingGraph={isBuildingGraph}
+              isGraphBuilt={isGraphBuilt}
             />
           ) : (
             <div className="graph-section">
@@ -365,6 +415,7 @@ export default function Home() {
             relationships={relationships}
             appState={appState}
             user={user}
+            isGraphBuilt={isGraphBuilt}
           />
         </div>
       </div>

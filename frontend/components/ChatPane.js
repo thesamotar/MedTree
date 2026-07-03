@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Activity, Sparkles, RefreshCw } from 'lucide-react';
+import { Send, Activity, Sparkles, RefreshCw, Brain } from 'lucide-react';
 
 // Simple lightweight markdown renderer
 const renderMarkdown = (text) => {
@@ -37,7 +37,7 @@ const renderMarkdown = (text) => {
   });
 };
 
-const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], relationships = [], appState, user }) => {
+const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], relationships = [], appState, user, isGraphBuilt }) => {
   const [query, setQuery] = useState('');
   const [history, setHistory] = useState([]);
   const messagesEndRef = useRef(null);
@@ -209,6 +209,17 @@ const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], re
           </button>
         </div>
       </div>
+
+      {/* Glassmorphic lock screen overlay when graph has not been synthesized */}
+      {!isGraphBuilt && (
+        <div className="chat-lock-overlay">
+          <Brain size={36} className="pulse-icon" style={{ color: '#66fcf1', marginBottom: '14px' }} />
+          <h3 style={{ fontWeight: 700, fontSize: '16px', margin: '0 0 8px 0', color: '#fff' }}>Clinical Reasoning Offline</h3>
+          <p style={{ fontSize: '12px', color: '#9ca3af', maxWidth: '300px', lineHeight: '1.5', margin: 0 }}>
+            Generate the medical tree first to compile your patient network into Cognee's semantic brain.
+          </p>
+        </div>
+      )}
 
       <style jsx global>{`
         @keyframes pulse {

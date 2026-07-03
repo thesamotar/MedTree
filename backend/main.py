@@ -135,6 +135,10 @@ class UserQueryRequest(BaseModel):
     user_id: str
     user_data: UserData
 
+class BuildGraphRequest(BaseModel):
+    user_id: str
+    user_data: UserData
+
 def build_context_from_user_data(query_request: UserQueryRequest) -> str:
     """Build a natural-language graph context string from the user's multi-account database records."""
     user_id = query_request.user_id
@@ -365,26 +369,21 @@ async def analyze_user_query(request: UserQueryRequest):
     # 1. Build context from user data
     graph_context = build_context_from_user_data(request)
     
-    # --- COGNEE LIVE INGESTION ---
+    # --- COGNEE LIVE SEARCH ---
+    cognee_context = graph_context
     try:
         import cognee
         from cognee.api.v1.search import SearchType
-        dataset_name = f"live_user_{request.user_id}"
-        print(f"Ingesting live data into Cognee dataset: {dataset_name}")
-        await cognee.add(data=graph_context, dataset_name=dataset_name)
-        print("Running cognify on live data...")
-        await cognee.cognify()
-        print("Searching Cognee graph...")
+        dataset_name = f"user_{request.user_id}"
+        print(f"Searching Cognee dataset: {dataset_name}")
         results = await cognee.search(query_text=query, query_type=SearchType.GRAPH_COMPLETION)
         
         if results:
             cognee_context = str(results)
-        else:
-            cognee_context = graph_context
     except Exception as e:
-        print(f"Cognee live integration failed: {e}")
+        print(f"Cognee search failed: {e}")
         cognee_context = graph_context
-    # ---------------------------------
+    # --------------------------
     
     # 2. Build traversal path
     traversal_path = build_traversal_path_from_user_data(request)
@@ -431,6 +430,42 @@ async def analyze_user_query(request: UserQueryRequest):
         "traversal_path": traversal_path,
         "scenario_description": f"User data traversal: {len(traversal_path['nodes'])} nodes, {len(traversal_path['edges'])} edges activated."
     }
+
+@app.post("/api/build-graph")
+async def build_graph(request: BuildGraphRequest):
+    """Build the Cognee semantic graph for a user by pruning first, then adding and cognifying."""
+    try:
+        import cognee
+        from cognee.infrastructure.databases.graph import get_graph_engine
+        
+        # 1. Build text context from user data
+        dummy_query_request = UserQueryRequest(query="", user_id=request.user_id, user_data=request.user_data)
+        graph_context = build_context_from_user_data(dummy_query_request)
+        
+        dataset_name = f"user_{request.user_id}"
+        print(f"Pruning existing Cognee graphs for safety...")
+        await cognee.prune.prune_system()
+        
+        print(f"Adding new data to dataset: {dataset_name}")
+        await cognee.add(data=graph_context, dataset_name=dataset_name)
+        
+        print("Cognifying graph...")
+        await cognee.cognify()
+        
+        # Fetch the visual graph nodes & edges directly from Cognee
+        print("Retrieving visual graph data...")
+        graph_engine = await get_graph_engine()
+        raw_graph_data = await graph_engine.get_graph_data()
+        nodes, edges = raw_graph_data
+        
+        return {
+            "success": True,
+            "nodes": nodes or [],
+            "edges": edges or []
+        }
+    except Exception as e:
+        print(f"Failed to build Cognee graph: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/graph")
 async def get_graph():

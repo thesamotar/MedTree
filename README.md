@@ -31,6 +31,19 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v3.4 — Infinite-Hop RLS Policies & On-Demand Graph Compiling (2026-07-03)
+
+**Database (`/supabase`)**
+- `migration.sql` — Upgraded the 2-hop traversal limitation to a recursive CTE function `get_all_connected_profile_ids`, enabling genuine multi-hop queries to an infinite depth while preserving user privacy bounds.
+
+**Backend (`/backend`)**
+- `main.py` — Implemented the `/api/build-graph` endpoint to support isolated on-demand graph generation (utilizing `cognee.prune.prune_system()`, `cognee.add()`, and `cognee.cognify()`).
+- `main.py` — Optimized the `/api/analyze-user` endpoint to run only `cognee.search()`, reducing chat query response time down to milliseconds.
+
+**Frontend (`/frontend`)**
+- `page.js` & `DataEntryPane.js` — Introduced the "Generate Medical Tree" compile workflow. 
+- `ChatPane.js` — Implemented a glassmorphic blurred overlay lock screen that restricts chat analysis until Cognee has synthesized the semantic graph.
+
 ### v3.3 — Draggable Nodes, Pathway Filtering & Connection Fixes (2026-07-03)
 
 **Frontend (`/frontend`)**

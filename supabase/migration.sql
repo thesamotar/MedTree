@@ -70,24 +70,30 @@ ALTER TABLE relationships ENABLE ROW LEVEL SECURITY;
 -- ============================================================
 -- STEP 2: Helper Function for transitive connection lookups
 -- ============================================================
--- SECURITY DEFINER bypasses RLS inside the function, avoiding infinite recursion
--- when the relationships table's SELECT policy references itself.
+-- SECURITY DEFINER bypasses RLS inside the function, avoiding infinite recursion.
+-- Uses a recursive Common Table Expression (CTE) to find all connected users at any hop depth.
 
-CREATE OR REPLACE FUNCTION get_direct_connection_ids(check_uid UUID)
+CREATE OR REPLACE FUNCTION get_all_connected_profile_ids(start_uid UUID)
 RETURNS UUID[]
 LANGUAGE sql
 SECURITY DEFINER
 STABLE
 AS $$
-  SELECT COALESCE(array_agg(
-    CASE 
-      WHEN requester_id = check_uid THEN receiver_id
-      ELSE requester_id
-    END
-  ), '{}')
-  FROM relationships
-  WHERE status = 'active'
-  AND (requester_id = check_uid OR receiver_id = check_uid);
+  WITH RECURSIVE family_tree AS (
+    -- Anchor member
+    SELECT start_uid AS member_id
+    UNION
+    -- Follow active relationships recursively
+    SELECT 
+      CASE 
+        WHEN r.requester_id = ft.member_id THEN r.receiver_id
+        ELSE r.requester_id
+      END
+    FROM relationships r
+    INNER JOIN family_tree ft ON (r.requester_id = ft.member_id OR r.receiver_id = ft.member_id)
+    WHERE r.status = 'active'
+  )
+  SELECT COALESCE(array_agg(member_id), '{}') FROM family_tree;
 $$;
 
 
@@ -95,30 +101,23 @@ $$;
 -- STEP 3: Row Level Security Policies
 -- ============================================================
 
--- medical_records: Read own, or read records of connections (up to 2 hops)
+-- medical_records: Read own, or read records of any connected profiles in the network (genuine multi-hop)
 CREATE POLICY "Read own or connected records" ON medical_records
   FOR SELECT USING (
     auth.uid() = user_id
-    -- 1-hop: direct connection
-    OR user_id = ANY(get_direct_connection_ids(auth.uid()))
-    -- 2-hop: connection of a connection (e.g. Abhishek -> Mamata -> Nani)
-    OR user_id = ANY(
-      SELECT unnest(get_direct_connection_ids(conn_id))
-      FROM unnest(get_direct_connection_ids(auth.uid())) AS conn_id
-    )
+    OR user_id = ANY(get_all_connected_profile_ids(auth.uid()))
   );
 
 CREATE POLICY "Manage own records" ON medical_records
   FOR ALL USING (auth.uid() = user_id);
 
--- relationships: View own, or if either participant is a direct connection
+-- relationships: View own, or if either participant is part of the connected component
 CREATE POLICY "View own relationships" ON relationships
   FOR SELECT USING (
     auth.uid() = requester_id 
     OR auth.uid() = receiver_id
-    -- 2-hop: can see a relationship if either participant is my direct connection
-    OR requester_id = ANY(get_direct_connection_ids(auth.uid()))
-    OR receiver_id = ANY(get_direct_connection_ids(auth.uid()))
+    OR requester_id = ANY(get_all_connected_profile_ids(auth.uid()))
+    OR receiver_id = ANY(get_all_connected_profile_ids(auth.uid()))
   );
 
 CREATE POLICY "Create relationships" ON relationships
