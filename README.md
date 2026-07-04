@@ -31,6 +31,25 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v3.6 — Graph Rendering, Family-History Traversal & Live Update Fixes (2026-07-04)
+
+**Backend (`/backend`)**
+- `main.py` — Fixed the "No nodes found" empty-graph bug in `POST /api/build-graph`: `prune_system()` deleted the Ladybug graph files but left the relational data-item records, so re-added content was deduplicated by hash and skipped by `cognify()`. Cleanup is now **scoped to the user's own dataset** via `cognee.datasets.empty_dataset()` (clears both the dataset's graph nodes/edges and its data-item records) instead of a global prune, and `cognify()` is scoped to that dataset. Other users' graphs are left untouched.
+- `main.py` — Re-established the per-user/per-dataset context (`set_database_global_context_variables`) before reading `get_graph_data()`, since the context that `cognify()` scopes the graph engine to is released when it returns.
+- `main.py` — Fixed `POST /api/graph/remove-note`, which called a non-existent `cognee.datasets.delete_dataset()` and silently fell back to a global `prune_data()` (wiping all users). It now uses `empty_dataset()` scoped to the note's dataset.
+- `main.py` — Extended the Malignant Hyperthermia trigger list to include all volatile/triggering anesthetic agents (`desflurane`, `isoflurane`, `halothane`, `enflurane`, `succinylcholine`, …) so queries like "is desflurane safe" surface the MH susceptibility link. Refactored trigger matching into a shared `_record_query_matches()` helper.
+- `main.py` — Added family-history parsing to `build_traversal_path_from_user_data`: cross-account relative conditions (stored as structured `semantic_facts` text, e.g. "Mamata Patra has Genetic condition: RYR1 Mutation") are wired into the traversal graph as virtual condition nodes attached to the real relative, so an MH/anesthetic query traverses patient → relative → condition and excludes irrelevant branches.
+- `main.py` — Unified the backend `to_id()` slug function to exactly match the frontend `toId()` (`[^a-z0-9] → _`), preventing mismatched/orphan node IDs between the rendered graph and the highlight set.
+
+**Frontend (`/frontend`)**
+- `page.js` — The visual graph is now always rendered from **structured Supabase data** (`buildGraphFromEntries`) instead of Cognee's raw `get_graph_data()` output. Cognee returns `[uuid, {props}]` tuples keyed by internal UUIDs that don't match profile IDs, which left the graph pane blank after generation.
+- `page.js` — Render account-less relatives' conditions as **virtual nodes** parsed from `semantic_facts` (RLS forbids writing them to the relative's own `medical_records`), attached to the matching family member. Kept in sync with the backend parser.
+- `page.js` — Persist the `isGraphBuilt` flag to `localStorage` and restore the graph on refresh, so a page reload no longer bounces the user back to the "Generate Tree" screen.
+- `page.js` — Unified all data changes (note approval/deletion, manual record edits, relationship changes) into a single `handleDataChange` that refreshes the graph in place and clears any stale query highlight, and **no longer forces a full regenerate** — since `/api/analyze-user` reasons over the live request payload, data edits never require rebuilding the tree.
+- `GraphPane.js` — Restored the default (no-query) view to show **only the logged-in patient and their own conditions/medications**; family members surface only when a query traverses to them. Added a guard that never renders an edge unless both endpoints are present, eliminating orphan `HAS_CONDITION` lines.
+- `ChatPane.js` — Note deletion via `@remove_clinical_note` is now incremental (refresh visual graph only) rather than triggering a full graph regenerate.
+- `DataEntryPane.js` — The clinical-note trash-delete button now also scope-prunes the note's Cognee dataset (mirroring the command path) and, via the unified handler, no longer reverts the UI to the "Generate Tree" screen.
+
 ### v3.5 — Incremental Ingestion, Editable Classifications, Command Palette, and Deletion Flow (2026-07-03)
 
 **Database (`/supabase`)**

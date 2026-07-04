@@ -480,11 +480,12 @@ const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], re
       }
       
       setHistory(prev => [...prev, { sender: 'system', text: `✅ Clinical Note ID ${noteId} deleted. Associated records and Cognee memory pruned.` }]);
+      // Incremental update only: the note's medical_records/semantic_facts are cascade-
+      // deleted in Supabase and its Cognee dataset was scoped-removed server-side
+      // (/api/graph/remove-note). Rebuilding the visual graph from the refreshed data is
+      // enough — no need to prune + re-cognify the whole graph via onBuildGraph().
       if (onDataChange) {
         await onDataChange();
-      }
-      if (onBuildGraph) {
-        onBuildGraph();
       }
     } catch (err) {
       console.error(err);

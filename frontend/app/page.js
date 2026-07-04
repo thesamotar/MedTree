@@ -87,23 +87,13 @@ export default function Home() {
     setProfiles(allProfs || []);
 
     // Return fetched data so callers can use it immediately
-    return { profiles: allProfs || [], records: records || [], relationships: rels || [] };
-  }, [supabase]);
-
-  // Check auth on mount
-  useEffect(() => {
-    const checkUser = async () => {
-      const { data: { user: currUser } } = await supabase.auth.getUser();
-      if (!currUser) {
-        router.push('/login');
-        return;
-      }
-      setUser(currUser);
-      setAuthLoading(false);
-      await loadAllData(currUser);
+    return {
+      profiles: allProfs || [],
+      records: records || [],
+      relationships: rels || [],
+      facts: (facts || []).map(f => f.fact_text),
     };
-    checkUser();
-  }, [router, loadAllData]);
+  }, [supabase]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -112,7 +102,7 @@ export default function Home() {
   };
 
   // Build graph data from user entries for visualization
-  const buildGraphFromEntries = useCallback((profs, records, rels, currUser) => {
+  const buildGraphFromEntries = useCallback((profs, records, rels, currUser, facts = []) => {
     if (!currUser) return { nodes: [], edges: [] };
     const nodes = [];
     const edges = [];
@@ -263,8 +253,124 @@ export default function Home() {
       });
     });
 
+    // 6. Add family-history conditions parsed from cross-account semantic facts.
+    // A relative's conditions can't be written to their own medical_records (RLS blocks
+    // writing to another account), so the note-approval flow stores them as structured
+    // text like "Mamata Patra has Genetic condition: RYR1 Mutation". Render them as
+    // virtual condition nodes attached to the real relative (matched by name), or to a
+    // virtual person node if the relative has no profile. Kept in sync with the backend
+    // parser (FAMILY_FACT_RE / build_traversal_path_from_user_data in main.py).
+    const familyFactRegex = /^(.+?) has (?:(Genetic|Autoimmune|Chronic|Symptom|Allergy) )?(condition|medication): (.+)$/i;
+    const condTypeMap = {
+      Genetic: 'GeneticCondition',
+      Autoimmune: 'AutoimmuneCondition',
+      Symptom: 'Symptom',
+      Allergy: 'Risk',
+      Chronic: 'AutoimmuneCondition',
+    };
+    (facts || []).forEach((factText) => {
+      const m = familyFactRegex.exec((factText || '').trim());
+      if (!m) return;
+      const subjectName = m[1].trim();
+      const conditionType = m[2] || 'Chronic';
+      const recordType = m[3].toLowerCase();
+      const name = m[4].trim();
+
+      // Resolve subject: exact name -> first-name/partial -> virtual person node.
+      let subjectNodeId = null;
+      const exact = profs.find(
+        (p) => reachableUsers.has(p.id) && p.full_name &&
+          p.full_name.toLowerCase() === subjectName.toLowerCase()
+      );
+      if (exact) {
+        subjectNodeId = exact.id;
+      } else {
+        const partial = profs.find(
+          (p) => reachableUsers.has(p.id) && p.full_name &&
+            (p.full_name.toLowerCase().startsWith(subjectName.toLowerCase()) ||
+             subjectName.toLowerCase().startsWith(p.full_name.toLowerCase().split(' ')[0]))
+        );
+        if (partial) {
+          subjectNodeId = partial.id;
+        } else {
+          subjectNodeId = `fam_${toId(subjectName)}`;
+          if (!nodes.find((n) => n.id === subjectNodeId)) {
+            nodes.push({ id: subjectNodeId, label: subjectName, type: 'Patient', group: 'Relative/Connection' });
+            edges.push({ id: `e_${currUser.id}_${subjectNodeId}`, source: currUser.id, target: subjectNodeId, label: 'FAMILY_HISTORY' });
+          }
+        }
+      }
+
+      const conceptId = toId(name);
+      if (!nodes.find((n) => n.id === conceptId)) {
+        nodes.push(
+          recordType === 'condition'
+            ? { id: conceptId, label: name, type: condTypeMap[conditionType] || 'AutoimmuneCondition', group: conditionType }
+            : { id: conceptId, label: name, type: 'Medication', group: 'medication' }
+        );
+      }
+      const edgeId = `e_${subjectNodeId}_${conceptId}`;
+      if (!edges.find((e) => e.id === edgeId)) {
+        edges.push({
+          id: edgeId,
+          source: subjectNodeId,
+          target: conceptId,
+          label: recordType === 'condition' ? 'HAS_CONDITION' : 'TAKES',
+        });
+      }
+    });
+
     return { nodes, edges };
   }, []);
+
+  // Check auth on mount (declared after buildGraphFromEntries since it uses it).
+  useEffect(() => {
+    const checkUser = async () => {
+      // Read the persisted "graph was built" flag synchronously before any await, so the
+      // localStorage sync effect (which runs during the first await) can't clobber it.
+      const wasBuilt = typeof window !== 'undefined' && localStorage.getItem('medtree_graph_built') === 'true';
+      const { data: { user: currUser } } = await supabase.auth.getUser();
+      if (!currUser) {
+        router.push('/login');
+        return;
+      }
+      setUser(currUser);
+      setAuthLoading(false);
+      const data = await loadAllData(currUser);
+      // Restore the built graph across refreshes: the visual graph is derived from Supabase
+      // data, so we can rebuild it immediately instead of forcing the user to regenerate.
+      if (wasBuilt) {
+        const fullGraph = buildGraphFromEntries(data.profiles, data.records, data.relationships, currUser, data.facts);
+        setGraphData(fullGraph);
+        setTraversalPath({ nodes: [], edges: [] });
+        setIsGraphBuilt(true);
+        setAppState('results');
+      }
+    };
+    checkUser();
+  }, [router, loadAllData, buildGraphFromEntries]);
+
+  // Persist the "graph built" flag so a page refresh restores the graph view instead of
+  // dropping the user back to the "Generate Tree" screen.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (isGraphBuilt) localStorage.setItem('medtree_graph_built', 'true');
+    else localStorage.removeItem('medtree_graph_built');
+  }, [isGraphBuilt]);
+
+  // Single handler for ANY data change (note approval, note deletion, manual record
+  // add/remove, relationship changes). The visual graph is derived from live Supabase
+  // data, and queries analyze the live payload (not Cognee's stored graph), so a data
+  // change never requires regenerating the tree. We just refresh the graph in place and
+  // clear any stale query highlight so the update is visible. isGraphBuilt is left as-is,
+  // so the user is never bounced back to the "Generate Tree" screen after editing data.
+  const handleDataChange = useCallback(async () => {
+    if (!user) return;
+    const data = await loadAllData(user);
+    const fullGraph = buildGraphFromEntries(data.profiles, data.records, data.relationships, user, data.facts);
+    setGraphData(fullGraph);
+    setTraversalPath({ nodes: [], edges: [] });
+  }, [user, loadAllData, buildGraphFromEntries]);
 
   // Analyze query
   const handleAnalyze = async (queryText) => {
@@ -293,7 +399,7 @@ export default function Home() {
       const data = await res.json();
 
       // Build full graph from current state
-      const fullGraph = buildGraphFromEntries(profiles, medicalRecords, relationships, user);
+      const fullGraph = buildGraphFromEntries(profiles, medicalRecords, relationships, user, semanticFacts);
       setGraphData(fullGraph);
       setTraversalPath(data.traversal_path || { nodes: [], edges: [] });
       setAppState('results');
@@ -303,7 +409,7 @@ export default function Home() {
       console.error('Analysis failed:', err);
 
       // Fallback: build graph locally and show it
-      const fullGraph = buildGraphFromEntries(profiles, medicalRecords, relationships, user);
+      const fullGraph = buildGraphFromEntries(profiles, medicalRecords, relationships, user, semanticFacts);
       setGraphData(fullGraph);
       setTraversalPath({
         nodes: fullGraph.nodes.map(n => n.id),
@@ -346,17 +452,19 @@ export default function Home() {
       });
 
       if (!res.ok) throw new Error('Backend error');
-      const data = await res.json();
-      
-      // If Cognee successfully returns visual nodes, render them
-      // Otherwise fall back to building the local layout representation
-      if (data.nodes && data.nodes.length > 0) {
-        setGraphData({ nodes: data.nodes, edges: data.edges });
-      } else {
-        const fullGraph = buildGraphFromEntries(profiles, medicalRecords, relationships, user);
-        setGraphData(fullGraph);
-      }
-      
+      await res.json(); // Cognee builds its semantic memory server-side (used for querying).
+
+      // Always render the *visual* graph from structured Supabase data. Cognee's raw
+      // get_graph_data() returns [uuid, {props}] tuples keyed by Cognee-generated UUIDs
+      // (plus internal DocumentChunk/TextSummary nodes) — those don't match our profile
+      // IDs and can't drive GraphPane's self-view, so feeding them in left the pane blank.
+      const fullGraph = buildGraphFromEntries(profiles, medicalRecords, relationships, user, semanticFacts);
+      setGraphData(fullGraph);
+
+      // Clear any stale query highlight so the initial view shows the user's own
+      // conditions/medications (GraphPane's no-highlight branch).
+      setTraversalPath({ nodes: [], edges: [] });
+
       setIsGraphBuilt(true);
       setAppState('results');
     } catch (err) {
@@ -411,13 +519,7 @@ export default function Home() {
               medicalRecords={medicalRecords}
               relationships={relationships}
               clinicalNotes={clinicalNotes}
-              onDataChange={async () => {
-                const data = await loadAllData(user);
-                // Rebuild local graph in-place from refreshed data
-                const fullGraph = buildGraphFromEntries(data.profiles, data.records, data.relationships, user);
-                setGraphData(fullGraph);
-                setIsGraphBuilt(false); // Force rebuild when database records change from DataEntry
-              }}
+              onDataChange={handleDataChange}
               onBuildGraph={handleBuildGraph}
               isBuildingGraph={isBuildingGraph}
               isGraphBuilt={isGraphBuilt}
@@ -442,17 +544,7 @@ export default function Home() {
             isGraphBuilt={isGraphBuilt}
             isBuildingGraph={isBuildingGraph}
             onBuildGraph={handleBuildGraph}
-            onDataChange={async () => {
-              const data = await loadAllData(user);
-              // Rebuild local graph in-place from refreshed data (keep results view)
-              if (appState === 'results') {
-                const fullGraph = buildGraphFromEntries(data.profiles, data.records, data.relationships, user);
-                setGraphData(fullGraph);
-                // Don't reset isGraphBuilt — Cognee graph is updated incrementally by the approval card
-              } else {
-                setIsGraphBuilt(false);
-              }
-            }}
+            onDataChange={handleDataChange}
           />
         </div>
       </div>

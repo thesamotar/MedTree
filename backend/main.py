@@ -1,6 +1,8 @@
 import os
+import re
 import json
 import asyncio
+from collections import defaultdict
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -45,11 +47,13 @@ app.add_middleware(
 # Initialize Anthropic client
 anthropic_key = os.getenv("ANTHROPIC_API_KEY")
 anthropic_client = None
+async_anthropic_client = None
 if anthropic_key and not anthropic_key.startswith("your-"):
     anthropic_client = anthropic.Anthropic(api_key=anthropic_key)
+    async_anthropic_client = anthropic.AsyncAnthropic(api_key=anthropic_key)
 
 # Initialize Google Gemini client (fallback when Anthropic is unavailable)
-gemini_key = os.getenv("GEMINI_API_KEY")
+# Re-use gemini_key already read at module top (line 20)
 gemini_client = None
 if genai and gemini_key and not gemini_key.startswith("your-"):
     try:
@@ -218,19 +222,53 @@ def build_context_from_user_data(query_request: UserQueryRequest) -> str:
                         
     return "\n".join(lines) if lines else "No medical data provided."
 
+# Matches the structured cross-account family-history facts written by the note-approval
+# flow, e.g. "Mamata Patra has Genetic condition: RYR1 Mutation". Groups:
+# 1=subject name, 2=condition_type (optional), 3=record_type, 4=condition/medication name.
+FAMILY_FACT_RE = re.compile(
+    r'^(.+?) has (?:(Genetic|Autoimmune|Chronic|Symptom|Allergy) )?(condition|medication): (.+)$',
+    re.IGNORECASE,
+)
+
+
+def _record_query_matches(rec_name_lower: str, query_lower: str) -> bool:
+    """Whether a condition/medication name is implicated by the query, via direct name
+    match or clinical trigger keywords. Shared by own records and family-history records."""
+    words = rec_name_lower.split()
+    if any(w in query_lower for w in words if len(w) > 2) or (rec_name_lower and rec_name_lower in query_lower):
+        return True
+
+    triggers = []
+    if "malignant hyperthermia" in rec_name_lower or "ryr1" in rec_name_lower or "hyperthermic" in rec_name_lower:
+        # Any volatile/triggering anesthetic agent, so "is desflurane safe" surfaces the link.
+        triggers = ["sevoflurane", "desflurane", "isoflurane", "halothane", "enflurane",
+                    "succinylcholine", "suxamethonium", "volatile", "anesthetic", "anaesthetic",
+                    "anesthesia", "anaesthesia", "surgery", "operation", "ryr1", "genetic",
+                    "hereditary", "inherited", "history", "risk"]
+    elif "cyp2d6" in rec_name_lower:
+        triggers = ["codeine", "prodrug", "tramadol", "metabolizer", "genetic", "hereditary", "inherited", "history", "risk"]
+    elif "psoriasis" in rec_name_lower or "arthritis" in rec_name_lower:
+        triggers = ["joints", "stiff", "rheumatology", "psoriatic", "genetic", "hereditary", "inherited", "history", "risk"]
+    elif "mold" in rec_name_lower or "tuberculosis" in rec_name_lower or "tb" in rec_name_lower:
+        triggers = ["cough", "respiratory", "breathing", "lung", "apartment", "apartment_3b", "apartment_2b"]
+
+    return any(t in query_lower for t in triggers)
+
+
 def build_traversal_path_from_user_data(query_request: UserQueryRequest) -> dict:
     """Determine which nodes and edges to highlight in the dynamic graph based on query terms."""
     query_lower = query_request.query.lower()
     user_id = query_request.user_id
     user_data = query_request.user_data
     
-    import re
-    to_id = lambda s: re.sub(r'[^a-z0-9_]', '', s.lower().replace(" ", "_"))
+    # Must exactly match the frontend toId() in page.js: lowercase, then replace every
+    # non-alphanumeric char with '_'. A divergent slug here (e.g. dropping punctuation)
+    # produces highlight IDs that don't match the rendered graph → orphan/missing nodes.
+    to_id = lambda s: re.sub(r'[^a-z0-9]', '_', (s or '').lower())
     
     profiles_map = {p.id: p for p in user_data.profiles}
     
     # 1. Build adjacency graph representation
-    from collections import defaultdict
     graph = defaultdict(list)
     edge_map = {} # Maps (node_a, node_b) -> edge_id
     
@@ -258,6 +296,46 @@ def build_traversal_path_from_user_data(query_request: UserQueryRequest) -> dict
             edge_map[(pid, rec_id)] = edge_id
             edge_map[(rec_id, pid)] = edge_id
 
+    # Add family-history conditions parsed from cross-account semantic facts.
+    # A relative's conditions can't be stored in their own medical_records (RLS), so the
+    # approval flow saves them as structured text like "Mamata Patra has Genetic condition:
+    # RYR1 Mutation". Parse those and wire them into the graph as virtual condition nodes
+    # attached to the real relative (or a virtual person if the relative has no profile),
+    # so a query can traverse patient -> relative -> condition. Kept in sync with the
+    # frontend parser in buildGraphFromEntries (page.js).
+    name_to_pid = {p.full_name.lower(): pid for pid, p in profiles_map.items() if p.full_name}
+    family_records = []  # (condition_node_id, condition_name_lower) for query matching below
+    for fact in (user_data.semantic_facts or []):
+        m = FAMILY_FACT_RE.match((fact or "").strip())
+        if not m:
+            continue
+        subject_name = m.group(1).strip()
+        rec_name = m.group(4).strip()
+
+        # Resolve subject: exact name -> first-name/partial -> virtual person node.
+        subj = name_to_pid.get(subject_name.lower())
+        if subj is None:
+            for pid, p in profiles_map.items():
+                pn = (p.full_name or "").lower()
+                if pn and (pn.startswith(subject_name.lower()) or subject_name.lower().startswith(pn.split(" ")[0])):
+                    subj = pid
+                    break
+        if subj is None:
+            subj = "fam_" + to_id(subject_name)
+            graph[user_id].append(subj)
+            graph[subj].append(user_id)
+            eid = f"e_{user_id}_{subj}"
+            edge_map[(user_id, subj)] = eid
+            edge_map[(subj, user_id)] = eid
+
+        cond_id = to_id(rec_name)
+        graph[subj].append(cond_id)
+        graph[cond_id].append(subj)
+        eid = f"e_{subj}_{cond_id}"
+        edge_map[(subj, cond_id)] = eid
+        edge_map[(cond_id, subj)] = eid
+        family_records.append((cond_id, rec_name.lower()))
+
     # 2. Find matched target nodes in query
     matched_node_targets = set()
     
@@ -269,28 +347,14 @@ def build_traversal_path_from_user_data(query_request: UserQueryRequest) -> dict
             
     # Match medical records by name or trigger keywords
     for r in user_data.medical_records:
-        rec_id = to_id(r.name)
-        rec_name_lower = r.name.lower()
-        
-        # Simple name match
-        words = rec_name_lower.split()
-        if any(w in query_lower for w in words if len(w) > 2) or rec_name_lower in query_lower:
-            matched_node_targets.add(rec_id)
-            continue
-            
-        # Clinical synonyms and trigger words mapping
-        triggers = []
-        if "malignant hyperthermia" in rec_name_lower:
-            triggers = ["sevoflurane", "succinylcholine", "anesthetic", "anesthesia", "surgery", "operation", "ryr1", "genetic", "hereditary", "inherited", "history", "risk"]
-        elif "cyp2d6" in rec_name_lower:
-            triggers = ["codeine", "prodrug", "tramadol", "metabolizer", "genetic", "hereditary", "inherited", "history", "risk"]
-        elif "psoriasis" in rec_name_lower or "arthritis" in rec_name_lower:
-            triggers = ["joints", "stiff", "rheumatology", "psoriatic", "genetic", "hereditary", "inherited", "history", "risk"]
-        elif "mold" in rec_name_lower or "tuberculosis" in rec_name_lower or "tb" in rec_name_lower:
-            triggers = ["cough", "respiratory", "breathing", "lung", "apartment", "apartment_3b", "apartment_2b"]
-            
-        if any(t in query_lower for t in triggers):
-            matched_node_targets.add(rec_id)
+        if _record_query_matches(r.name.lower(), query_lower):
+            matched_node_targets.add(to_id(r.name))
+
+    # Match family-history conditions the same way, so an MH/anesthetic query pulls in the
+    # relative that carries RYR1 / a prior MH reaction (and, transitively, the path to them).
+    for cond_id, cond_name_lower in family_records:
+        if _record_query_matches(cond_name_lower, query_lower):
+            matched_node_targets.add(cond_id)
 
     # 3. BFS to find path from user_id to all matched targets
     highlighted_nodes = set()
@@ -371,7 +435,6 @@ CLINICAL_SYSTEM_PROMPT = (
 async def analyze_user_query(request: UserQueryRequest):
     """Analyze a clinical query using the user's own medical data as graph context."""
     query = request.query
-    user_data = request.user_data
     
     # 1. Build context from user data
     graph_context = build_context_from_user_data(request)
@@ -399,15 +462,16 @@ async def analyze_user_query(request: UserQueryRequest):
     warning = ""
     user_content = f"Clinical Query: {query}\n\nPatient Medical Graph Data (via Cognee):\n{cognee_context}"
     
-    if anthropic_client:
+    if async_anthropic_client:
         try:
-            response = anthropic_client.messages.create(
+            response = await async_anthropic_client.messages.create(
                 model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20240620"),
                 max_tokens=1200,
                 system=CLINICAL_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_content}]
             )
-            warning = response.content[0].text
+            block = response.content[0]
+            warning = block.text if hasattr(block, 'text') else str(block)
         except Exception as e:
             print(f"Anthropic API error: {e}")
             warning = f"### ⚠️ API Error\n\nCould not reach Claude 3.5. Error: {str(e)}\n\n---\n\n**Graph Context (via Cognee):**\n```\n{cognee_context}\n```"
@@ -444,26 +508,67 @@ async def build_graph(request: BuildGraphRequest):
     try:
         import cognee
         from cognee.infrastructure.databases.graph import get_graph_engine
+        from cognee.context_global_variables import set_database_global_context_variables
+        from cognee.modules.users.methods import get_default_user
+        from cognee.infrastructure.databases.relational import get_relational_engine
         
         # 1. Build text context from user data
         dummy_query_request = UserQueryRequest(query="", user_id=request.user_id, user_data=request.user_data)
         graph_context = build_context_from_user_data(dummy_query_request)
         
         dataset_name = f"user_{request.user_id}"
-        print(f"Pruning existing Cognee graphs for safety...")
-        await cognee.prune.prune_system()
-        
+        user = await get_default_user()
+
+        # Scoped rebuild: empty ONLY this user's dataset instead of a global prune.
+        # A global prune_system()/prune_data() would wipe every user's graph. Worse,
+        # prune_system() alone leaves the relational data-item records behind, so on a
+        # rebuild cognee.add() deduplicates the identical content by hash and cognify()
+        # skips it, leaving the graph empty. empty_dataset() clears this dataset's graph
+        # nodes/edges AND its data-item records, so the re-added content is reprocessed,
+        # while other users' datasets are left untouched.
+        print(f"Clearing existing Cognee dataset: {dataset_name}")
+        existing = await cognee.datasets.list_datasets(user)
+        for d in existing:
+            if d.name == dataset_name:
+                await cognee.datasets.empty_dataset(d.id, user)
+
         print(f"Adding new data to dataset: {dataset_name}")
         await cognee.add(data=graph_context, dataset_name=dataset_name)
-        
+
+        # Scope cognify to this dataset so we don't reprocess unrelated stale datasets.
         print("Cognifying graph...")
-        await cognee.cognify()
+        await cognee.cognify(datasets=[dataset_name])
         
-        # Fetch the visual graph nodes & edges directly from Cognee
+        # Fetch the visual graph nodes & edges directly from Cognee.
+        # cognify() runs inside a scoped ContextVar that points the graph engine
+        # to a per-user/per-dataset Ladybug DB. After cognify() returns, that context
+        # is released, so we must re-establish it before calling get_graph_engine().
         print("Retrieving visual graph data...")
-        graph_engine = await get_graph_engine()
-        raw_graph_data = await graph_engine.get_graph_data()
-        nodes, edges = raw_graph_data
+
+        # Look up the dataset ID that cognee.add() created for our dataset_name
+        from cognee.modules.data.models import Dataset
+        from sqlalchemy import select
+        engine = get_relational_engine()
+        dataset_id = None
+        async with engine.get_async_session() as session:
+            result = await session.execute(
+                select(Dataset).where(Dataset.name == dataset_name)
+            )
+            dataset = result.scalars().first()
+            if dataset:
+                dataset_id = dataset.id
+
+        nodes, edges = [], []
+        if dataset_id:
+            async with set_database_global_context_variables(dataset_id, user.id):
+                graph_engine = await get_graph_engine()
+                raw_graph_data = await graph_engine.get_graph_data()
+                nodes, edges = raw_graph_data
+        else:
+            print(f"WARNING: Dataset '{dataset_name}' not found after cognify. Falling back to root graph engine.")
+            graph_engine = await get_graph_engine()
+            raw_graph_data = await graph_engine.get_graph_data()
+            nodes, edges = raw_graph_data
         
         return {
             "success": True,
@@ -547,9 +652,9 @@ async def analyze_query(request: QueryRequest):
     )
     user_content = f"User Request: {request.query}\n\nCognee Graph Context:\n{cognee_context}"
     
-    if anthropic_client:
+    if async_anthropic_client:
         try:
-            response = anthropic_client.messages.create(
+            response = await async_anthropic_client.messages.create(
                 model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20240620"),
                 max_tokens=1000,
                 system=demo_system_prompt,
@@ -557,8 +662,8 @@ async def analyze_query(request: QueryRequest):
                     {"role": "user", "content": user_content}
                 ]
             )
-            # Response is in text
-            warning = response.content[0].text
+            block = response.content[0]
+            warning = block.text if hasattr(block, 'text') else str(block)
         except Exception as e:
             print(f"Anthropic API call failed: {e}")
             warning = f"### [Error invoking Claude 3.5 API]\n\n{get_mock_warning(query)}"
@@ -681,15 +786,16 @@ async def call_llm_json(system_prompt: str, user_content: str) -> dict:
             print(f"OpenAI error in call_llm_json: {e}")
             
     # Try Anthropic as first fallback
-    if not response_text and anthropic_client:
+    if not response_text and async_anthropic_client:
         try:
-            response = anthropic_client.messages.create(
+            response = await async_anthropic_client.messages.create(
                 model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20240620"),
                 max_tokens=1000,
                 system=system_prompt + "\n\nYou MUST reply with a valid JSON object ONLY. Do not wrap in markdown blocks like ```json.",
                 messages=[{"role": "user", "content": user_content}]
             )
-            response_text = response.content[0].text
+            block = response.content[0]
+            response_text = block.text if hasattr(block, 'text') else str(block)
         except Exception as e:
             print(f"Anthropic error in call_llm_json: {e}")
             
@@ -781,16 +887,26 @@ async def add_facts_to_graph(request: AddFactsRequest):
 
 @app.post("/api/graph/remove-note")
 async def remove_note_from_graph(request: RemoveNoteRequest):
-    """Surgically remove a specific note's dataset from the Cognee graph."""
+    """Remove a specific note's dataset from the Cognee graph."""
+    dataset_name = f"user_{request.user_id}_note_{request.note_id}"
     try:
         import cognee
-        
-        dataset_name = f"user_{request.user_id}_note_{request.note_id}"
-        
-        print(f"Pruning Cognee dataset: {dataset_name}")
-        await cognee.prune.prune_data()
-        
-        return {"success": True, "pruned_dataset": dataset_name}
+        from cognee.modules.users.methods import get_default_user
+
+        print(f"Deleting Cognee dataset: {dataset_name}")
+        # Scope deletion to this one dataset instead of prune_data(), which wipes ALL
+        # users' data. empty_dataset() removes the dataset's graph nodes/edges and its
+        # relational data-item records. (Note: this cognee version has no
+        # delete_dataset(); empty_dataset() is the supported per-dataset removal.)
+        user = await get_default_user()
+        datasets = await cognee.datasets.list_datasets(user)
+        target = [d for d in datasets if d.name == dataset_name]
+        if target:
+            await cognee.datasets.empty_dataset(target[0].id, user)
+            return {"success": True, "pruned_dataset": dataset_name}
+        else:
+            print(f"Dataset '{dataset_name}' not found in Cognee, nothing to prune.")
+            return {"success": True, "pruned_dataset": dataset_name, "detail": "Dataset not found, may have already been removed."}
     except Exception as e:
         print(f"Failed to prune Cognee dataset: {e}")
         # Non-fatal: dataset may not exist if graph was never built for this note

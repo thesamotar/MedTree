@@ -42,34 +42,39 @@ const GraphPane = ({ graphData, traversalPath, userId }) => {
       activeNodes = graphData.nodes.filter((node) => highlightedNodeIds.includes(node.id));
       activeEdges = graphData.edges.filter((edge) => highlightedEdgeIds.includes(edge.id));
     } else {
-      // 2. If NO query is active, show only the current user (userId) and their direct medical conditions/medications
+      // 2. No query active: show ONLY the logged-in patient and their own medical
+      // conditions/medications. Family members (and their conditions) are intentionally
+      // hidden here — they surface only when a query traverses to them. graphData still
+      // contains the full family subgraph; we just don't render it in this default view.
       const selfNode = graphData.nodes.find((node) => node.id === userId);
-      
       if (selfNode && userId) {
-        // Find direct edges from current user to conditions/medications (exclude family links)
         const selfEdges = graphData.edges.filter((edge) => {
           const isSelfParticipant = edge.source === userId || edge.target === userId;
           if (!isSelfParticipant) return false;
-          
-          const otherNodeId = edge.source === userId ? edge.target : edge.source;
-          const otherNode = graphData.nodes.find(n => n.id === otherNodeId);
+          // Keep only edges to the patient's own conditions/medications, not to other people.
+          const otherId = edge.source === userId ? edge.target : edge.source;
+          const otherNode = graphData.nodes.find((n) => n.id === otherId);
           return otherNode && otherNode.type !== 'Patient';
         });
-
-        const selfConnectedNodeIds = new Set(
+        const selfConnectedIds = new Set(
           selfEdges.map((edge) => (edge.source === userId ? edge.target : edge.source))
         );
-
         activeNodes = graphData.nodes.filter(
-          (node) => node.id === userId || selfConnectedNodeIds.has(node.id)
+          (node) => node.id === userId || selfConnectedIds.has(node.id)
         );
         activeEdges = selfEdges;
       } else {
-        // Fallback in case of missing profile details
+        // Fallback if the profile isn't resolvable: show everything rather than nothing.
         activeNodes = graphData.nodes;
         activeEdges = graphData.edges;
       }
     }
+
+    // Guard against orphan edges: never render an edge unless BOTH endpoints are in the
+    // active node set. This prevents dangling HAS_CONDITION lines when the highlighted
+    // edge/node sets from the backend traversal don't line up perfectly.
+    const activeNodeIds = new Set(activeNodes.map((n) => n.id));
+    activeEdges = activeEdges.filter((e) => activeNodeIds.has(e.source) && activeNodeIds.has(e.target));
 
     const positions = computePositions(activeNodes);
 

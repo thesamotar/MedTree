@@ -45,8 +45,22 @@ const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationship
         .from('clinical_notes')
         .delete()
         .eq('id', noteId);
-        
+
       if (error) throw error;
+
+      // Scope-remove this note's dataset from Cognee too (mirrors the @remove_clinical_note
+      // command path), so deletion stays incremental and doesn't leave stale memory.
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        await fetch(`${apiUrl}/api/graph/remove-note`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId, note_id: noteId }),
+        });
+      } catch (graphErr) {
+        console.error('Cognee prune failed (non-fatal):', graphErr);
+      }
+
       if (onDataChange) onDataChange();
     } catch (err) {
       console.error("Failed to delete note:", err);
