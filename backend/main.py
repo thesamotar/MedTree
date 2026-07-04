@@ -420,47 +420,111 @@ def build_traversal_path_from_user_data(query_request: UserQueryRequest) -> dict
 
 # Shared system prompt for clinical reasoning (used by both Claude and Gemini)
 CLINICAL_SYSTEM_PROMPT = (
-    "You are an expert clinical decision support AI assistant. "
-    "You are given a patient's medical graph data including family relationships, "
-    "conditions, medications, and living arrangements. "
-    "Analyze the data to find hidden multi-hop medical risks. "
-    "Look for: hereditary genetic risks, drug interaction dangers, "
-    "environmental hazards shared between cohabitants, and autoimmune clustering patterns. "
-    "Respond with a clear, concise clinical alert in Markdown format. "
-    "Include: the risk found, the traversal path through relationships, "
-    "and recommended actions for a doctor."
+    "You are a clinical decision-support assistant. Explain your findings in clear, plain "
+    "language that a busy clinician — or an informed patient — can understand at a glance. "
+    "You are given a patient's connected medical picture: their family relationships, "
+    "conditions, medications, and any shared living arrangements.\n\n"
+    "Find the single most important hidden or multi-step risk (an inherited/genetic risk, a "
+    "dangerous drug interaction, a shared environmental hazard, or a cluster of related "
+    "conditions) and explain it simply.\n\n"
+    "Reply in Markdown using these short sections and nothing else:\n"
+    "### Bottom line\n"
+    "One or two plain-English sentences: what the key risk is and what to do about it.\n\n"
+    "### Risk pathway\n"
+    "Show HOW the risk reaches the patient, step by step, so a clinician can follow the chain of "
+    "reasoning across the family. Use a numbered list where each step is a complete, plain-English "
+    "sentence that names the person, how they are related to the patient, and the relevant clinical "
+    "finding. For example:\n"
+    "1. The patient's grandmother had a severe, life-threatening reaction under general anaesthesia.\n"
+    "2. The patient's mother was confirmed to carry the RYR1 gene change (which causes that reaction).\n"
+    "3. Because this trait is inherited (autosomal dominant), the patient has about a 50% chance of "
+    "carrying it too.\n"
+    "4. The drugs planned for surgery (sevoflurane, succinylcholine) are known triggers of that "
+    "reaction.\n"
+    "Keep every step a real sentence — do NOT use arrow-only diagrams, code blocks, or database IDs.\n\n"
+    "### Recommended next steps\n"
+    "A short Markdown table with columns 'Action', 'Urgency', 'Why'. In the Urgency column use "
+    "exactly one of: CRITICAL, URGENT, MEDIUM, LOW.\n\n"
+    "Rules: Keep it concise. The FIRST time you use a medical term or abbreviation, add a brief "
+    "plain-language explanation in parentheses (e.g. 'malignant hyperthermia (a life-threatening "
+    "reaction to certain anaesthetic drugs)'). Be direct about severity but not alarmist. Base your "
+    "answer only on the information provided; if it is insufficient, say so instead of inventing "
+    "details."
 )
+
+
+def _extract_cognee_context(results) -> str:
+    """Pull the human-readable text out of Cognee search results and strip internal markers
+    (content delimiters, index-field tags, node/connection headers) so the clinical LLM is
+    given clean facts rather than raw database tokens."""
+    items = results if isinstance(results, list) else [results]
+    parts = []
+    for r in items:
+        if isinstance(r, dict):
+            parts.append(str(r.get("search_result") or r.get("context") or r.get("text") or ""))
+        else:
+            parts.append(str(r))
+    text = "\n".join(p for p in parts if p and p.strip())
+    # Remove Cognee's internal formatting markers.
+    text = text.replace("__node_content_start__", "").replace("__node_content_end__", "")
+    text = re.sub(r'^\s*(Nodes|Connections|Node|Edge):\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\s*\[[a-z0-9_,\s]+\]\s*$', '', text, flags=re.MULTILINE)  # trailing index tags
+    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    return text
 
 @app.post("/api/analyze-user")
 async def analyze_user_query(request: UserQueryRequest):
     """Analyze a clinical query using the user's own medical data as graph context."""
     query = request.query
     
-    # 1. Build context from user data
+    # 1. BFS context from the live payload — kept only as a resilient fallback.
     graph_context = build_context_from_user_data(request)
-    
-    # --- COGNEE LIVE SEARCH ---
+
+    # --- COGNEE GRAPH RETRIEVAL (primary) ---
+    # Route the query genuinely through Cognee's knowledge-graph memory, scoped to THIS
+    # user's dataset (via datasets=/user=, the same scoping /build-graph relies on).
+    # only_context=True returns the graph-derived context Cognee retrieves for the query —
+    # the relevant entities/relationships it linked across every ingested note, including
+    # semantic bridges (e.g. RYR1 -> malignant hyperthermia -> triggering agents) that no
+    # keyword/BFS pass would find. We then hand that context to the clinical LLM. We fall
+    # back to the BFS context only if Cognee has nothing (graph not built yet) or errors.
     cognee_context = graph_context
+    retrieval_source = "bfs-fallback"
     try:
         import cognee
         from cognee.api.v1.search import SearchType
+        from cognee.modules.users.methods import get_default_user
+
         dataset_name = f"user_{request.user_id}"
-        print(f"Searching Cognee dataset: {dataset_name}")
-        results = await cognee.search(query_text=query, query_type=SearchType.GRAPH_COMPLETION)
-        
-        if results:
-            cognee_context = str(results)
+        user = await get_default_user()
+        print(f"Cognee graph retrieval on dataset: {dataset_name}")
+        results = await cognee.search(
+            query_text=query,
+            query_type=SearchType.GRAPH_COMPLETION,
+            datasets=[dataset_name],
+            user=user,
+            only_context=True,
+            top_k=20,
+        )
+        retrieved = _extract_cognee_context(results)
+        if retrieved.strip():
+            cognee_context = retrieved
+            retrieval_source = "cognee-graph"
+            print(f"Cognee retrieval OK ({len(retrieved)} chars from graph)")
+        else:
+            print("Cognee retrieval returned no context; using BFS fallback.")
     except Exception as e:
-        print(f"Cognee search failed: {e}")
+        print(f"Cognee search failed: {e}; using BFS fallback.")
         cognee_context = graph_context
-    # --------------------------
-    
-    # 2. Build traversal path
+    # ----------------------------------------
+
+    # 2. Build traversal path (visual highlight only)
     traversal_path = build_traversal_path_from_user_data(request)
     
     # 3. Call LLM for reasoning (Claude → Gemini → Mock fallback)
     warning = ""
-    user_content = f"Clinical Query: {query}\n\nPatient Medical Graph Data (via Cognee):\n{cognee_context}"
+    context_label = "retrieved via Cognee knowledge graph" if retrieval_source == "cognee-graph" else "assembled from patient records"
+    user_content = f"Clinical Query: {query}\n\nPatient Medical Graph Data ({context_label}):\n{cognee_context}"
     
     if async_anthropic_client:
         try:
@@ -495,11 +559,13 @@ async def analyze_user_query(request: UserQueryRequest):
             f"**Traversal:** {len(traversal_path['nodes'])} nodes and {len(traversal_path['edges'])} edges activated."
         )
     
+    src_label = "Cognee graph retrieval" if retrieval_source == "cognee-graph" else "records fallback (Cognee empty)"
     return {
         "warning": warning,
         "cognee_context": cognee_context,
+        "retrieval_source": retrieval_source,
         "traversal_path": traversal_path,
-        "scenario_description": f"User data traversal: {len(traversal_path['nodes'])} nodes, {len(traversal_path['edges'])} edges activated."
+        "scenario_description": f"{src_label}: {len(traversal_path['nodes'])} nodes, {len(traversal_path['edges'])} edges highlighted."
     }
 
 @app.post("/api/build-graph")

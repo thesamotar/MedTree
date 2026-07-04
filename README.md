@@ -31,6 +31,14 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v3.8 — Genuine Cognee Retrieval & Readable Clinical Output (2026-07-05)
+
+**Backend (`/backend`)**
+- `main.py` — `POST /api/analyze-user` now answers **genuinely through Cognee's graph retrieval** instead of quietly falling back to the manual BFS context. The `cognee.search` call is scoped to the user's dataset (`datasets=[...]`, `user=...`) — the missing scoping that previously made it return nothing — and uses `only_context=True` so Cognee's knowledge-graph retrieval supplies the context, which the clinical LLM then reasons over. The manual BFS context is now used only as a fallback when the graph is empty or Cognee errors.
+- `main.py` — Added a `retrieval_source` field (`cognee-graph` vs `bfs-fallback`) to the response and surfaced it in `scenario_description`, so the UI honestly shows when an answer was produced from Cognee's graph.
+- `main.py` — Added `_extract_cognee_context()` to pull the human-readable text out of Cognee search results and strip internal markers (content delimiters, index-field tags, node/edge headers, raw IDs) before it reaches the LLM.
+- `main.py` — Rewrote `CLINICAL_SYSTEM_PROMPT` for plain, clinically-readable output with fixed sections: **Bottom line**, **Risk pathway** (a numbered, plain-English walk-through of the multi-hop family chain — no ASCII arrow diagrams or raw tokens), and **Recommended next steps** (a table with CRITICAL/URGENT/MEDIUM/LOW urgency). Medical terms are explained in parentheses on first use.
+
 ### v3.7 — Graph Layout, Navigation & Chat Formatting Polish (2026-07-04)
 
 **Frontend (`/frontend`)**
