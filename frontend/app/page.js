@@ -6,7 +6,7 @@ import { createClient } from '@/utils/supabase/client';
 import GraphPane from '@/components/GraphPane';
 import ChatPane from '@/components/ChatPane';
 import DataEntryPane from '@/components/DataEntryPane';
-import { LogOut, ArrowLeft, Activity } from 'lucide-react';
+import { LogOut, ArrowLeft, ArrowRight, Activity } from 'lucide-react';
 
 export default function Home() {
   const router = useRouter();
@@ -431,6 +431,10 @@ export default function Home() {
     setTraversalPath({ nodes: [], edges: [] });
   };
 
+  const handleViewGraph = () => {
+    setAppState('results');
+  };
+
   const handleBuildGraph = async () => {
     setIsBuildingGraph(true);
     try {
@@ -492,6 +496,11 @@ export default function Home() {
           {appState === 'results' && (
             <button className="topbar-btn" onClick={handleBackToEntry}>
               <ArrowLeft size={16} /> Back to Data Entry
+            </button>
+          )}
+          {appState === 'entry' && isGraphBuilt && (
+            <button className="topbar-btn" onClick={handleViewGraph}>
+              View Graph <ArrowRight size={16} />
             </button>
           )}
           <div className="topbar-brand">

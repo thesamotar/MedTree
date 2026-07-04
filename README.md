@@ -31,6 +31,18 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v3.7 — Graph Layout, Navigation & Chat Formatting Polish (2026-07-04)
+
+**Frontend (`/frontend`)**
+- `page.js` — Added a topbar **"View Graph"** button (shown on the Data Entry screen once a graph has been built) so users can return to the graph view without having to send a chat query.
+- `GraphPane.js` — Replaced the staggered-grid auto-layout with a **column-per-patient layered layout**: each patient/relationship node gets its own column on the top level, and that patient's conditions/medications are placed directly beneath them, so every item stays under the patient it belongs to (no cross-patient criss-cross).
+- `GraphPane.js` — Each patient's items are packed into a **sub-grid of up to 3 nodes per row** (conditions band, then a medications band) so patients with many records stay compact instead of forming a long vertical stack.
+- `GraphPane.js` & `CustomNode.js` — Added id'd handles on all four sides of each node and route edges accordingly: same-level **patient ↔ patient** links exit/enter from the **sides**, while **patient → condition/medication** links drop from the **bottom** into the child's **top**.
+- `GraphPane.js` — Tightened `fitView` padding (and re-key on the visible node set) so the graph fills ~60–80% of the pane and re-centers when switching between the self view and a query traversal.
+- `GraphPane.js` — De-duplicate nodes/edges by id before rendering to fix a React "two children with the same key" crash (a condition could arrive as both an own record and a family-history fact).
+- `ChatPane.js` — Rewrote the lightweight markdown renderer into a **block-aware renderer** (no new dependencies): `#`–`####` headings, `---` rules, **GitHub-style pipe tables** (styled, horizontally scrollable), ordered/unordered lists, paragraphs, and inline `**bold**` / `*italic*`.
+- `ChatPane.js` — Added **severity colour cues** for urgency keywords in clinical alerts, rationalised to four categories: `CRITICAL` (red), `URGENT` (orange), `MEDIUM` (yellow), `LOW` (green). Matched case-sensitively so uppercase levels are highlighted while the same words in ordinary prose are left untouched.
+
 ### v3.6 — Graph Rendering, Family-History Traversal & Live Update Fixes (2026-07-04)
 
 **Backend (`/backend`)**

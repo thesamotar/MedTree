@@ -2,40 +2,144 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Send, Activity, Sparkles, RefreshCw, Brain, Check } from 'lucide-react';
 import { createClient } from '@/utils/supabase/client';
 
-// Simple lightweight markdown renderer
+// Urgency/severity keywords get a colour cue (e.g. in the Urgency column of a table or in
+// priority markers). Matched case-sensitively so uppercase levels are highlighted but the
+// same words in ordinary prose (e.g. "high probability") are left untouched.
+// 4 categories: critical (red), urgent (orange), medium (yellow), low (green).
+const SEVERITY_COLORS = {
+  CRITICAL: '#ef4444', // critical — red
+  URGENT: '#f97316',   // urgent — orange
+  MEDIUM: '#eab308',   // medium — yellow
+  LOW: '#22c55e',      // low — green
+};
+
+// Inline markdown: **bold**, *italic*, and coloured severity keywords.
+const renderInlineMd = (text, keyPrefix = 'i') => {
+  if (text == null) return null;
+  const parts = [];
+  const regex = /(\*\*[^*]+\*\*|\*[^*]+\*|\b(?:CRITICAL|URGENT|MEDIUM|LOW)\b)/g;
+  let last = 0;
+  let m;
+  let n = 0;
+  while ((m = regex.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    const tok = m[0];
+    if (tok.startsWith('**')) {
+      parts.push(<strong key={`${keyPrefix}-b${n}`} style={{ color: '#66fcf1' }}>{tok.slice(2, -2)}</strong>);
+    } else if (tok.startsWith('*')) {
+      parts.push(<em key={`${keyPrefix}-i${n}`} style={{ color: '#e5e7eb' }}>{tok.slice(1, -1)}</em>);
+    } else {
+      parts.push(<strong key={`${keyPrefix}-s${n}`} style={{ color: SEVERITY_COLORS[tok] || '#c5c6c7' }}>{tok}</strong>);
+    }
+    last = regex.lastIndex;
+    n += 1;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts.length ? parts : text;
+};
+
+// Render a GitHub-style pipe table (| a | b | with a |---|---| separator row).
+const renderMdTable = (tableLines, key) => {
+  const parseRow = (row) => row.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+  const rows = tableLines.map(parseRow);
+  let header = null;
+  let body = rows;
+  if (rows.length >= 2 && rows[1].every((c) => /^:?-{2,}:?$/.test(c.replace(/\s/g, '')))) {
+    header = rows[0];
+    body = rows.slice(2);
+  }
+  const cell = { border: '1px solid #2b3a4a', padding: '6px 10px', fontSize: '11px', color: '#c5c6c7', textAlign: 'left', verticalAlign: 'top', lineHeight: '1.4' };
+  const th = { ...cell, color: '#66fcf1', fontWeight: 700, background: '#1f2833', whiteSpace: 'nowrap' };
+  return (
+    <div key={`tbl-${key}`} style={{ overflowX: 'auto', margin: '8px 0' }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: '340px' }}>
+        {header && (
+          <thead><tr>{header.map((h, ci) => <th key={ci} style={th}>{renderInlineMd(h, `th-${key}-${ci}`)}</th>)}</tr></thead>
+        )}
+        <tbody>
+          {body.map((r, ri) => (
+            <tr key={ri}>{r.map((c, ci) => <td key={ci} style={cell}>{renderInlineMd(c, `td-${key}-${ri}-${ci}`)}</td>)}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
+// Block-level markdown: headings (# .. ####), --- rules, pipe tables, ordered/unordered
+// lists, and paragraphs, with inline bold/italic. Self-contained (no external deps).
 const renderMarkdown = (text) => {
   if (!text) return null;
   const lines = text.split('\n');
-  return lines.map((line, index) => {
-    if (line.startsWith('### ')) {
-      return <h3 key={index} style={{ color: '#66fcf1', margin: '14px 0 8px 0', fontSize: '15px', fontWeight: 'bold' }}>{line.replace('### ', '')}</h3>;
-    }
-    if (line.startsWith('#### ')) {
-      return <h4 key={index} style={{ color: '#e5e7eb', margin: '10px 0 6px 0', fontSize: '13px', fontWeight: '600' }}>{line.replace('#### ', '')}</h4>;
-    }
-    let content = line;
-    const boldRegex = /\*\*(.*?)\*\*/g;
-    let match;
-    const elements = [];
-    let lastIndex = 0;
-    while ((match = boldRegex.exec(line)) !== null) {
-      if (match.index > lastIndex) elements.push(line.substring(lastIndex, match.index));
-      elements.push(<strong key={match.index} style={{ color: '#66fcf1' }}>{match[1]}</strong>);
-      lastIndex = boldRegex.lastIndex;
-    }
-    if (lastIndex < line.length) elements.push(line.substring(lastIndex));
-    const renderedLine = elements.length > 0 ? elements : content;
+  const headingStyle = {
+    1: { color: '#66fcf1', margin: '16px 0 8px 0', fontSize: '17px', fontWeight: 'bold' },
+    2: { color: '#66fcf1', margin: '14px 0 8px 0', fontSize: '15px', fontWeight: 'bold' },
+    3: { color: '#66fcf1', margin: '12px 0 6px 0', fontSize: '14px', fontWeight: 'bold' },
+    4: { color: '#e5e7eb', margin: '10px 0 6px 0', fontSize: '13px', fontWeight: '600' },
+  };
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
 
-    if (line.startsWith('- ')) {
-      return <li key={index} style={{ marginLeft: '16px', marginBottom: '4px', listStyleType: 'square', color: '#c5c6c7' }}>{typeof renderedLine === 'string' ? renderedLine.substring(2) : renderedLine}</li>;
+    // Table block: consecutive lines starting with '|'
+    if (trimmed.startsWith('|')) {
+      const tbl = [];
+      while (i < lines.length && lines[i].trim().startsWith('|')) { tbl.push(lines[i]); i += 1; }
+      blocks.push(renderMdTable(tbl, i));
+      continue;
     }
-    const numMatch = line.match(/^(\d+)\.\s(.*)/);
-    if (numMatch) {
-      return <div key={index} style={{ display: 'flex', marginLeft: '12px', marginBottom: '6px', color: '#c5c6c7' }}><span style={{ color: '#66fcf1', marginRight: '6px', fontWeight: 'bold' }}>{numMatch[1]}.</span><span>{numMatch[2]}</span></div>;
+
+    // Horizontal rule
+    if (/^-{3,}$/.test(trimmed)) {
+      blocks.push(<hr key={`hr-${i}`} style={{ border: 'none', borderTop: '1px solid #2b3a4a', margin: '12px 0' }} />);
+      i += 1;
+      continue;
     }
-    if (line.trim() === '') return <div key={index} style={{ height: '8px' }} />;
-    return <p key={index} style={{ marginBottom: '6px', lineHeight: '1.4', color: '#c5c6c7' }}>{renderedLine}</p>;
-  });
+
+    // Heading (# .. ######, clamped to our 4 styles)
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const level = Math.min(h[1].length, 4);
+      blocks.push(<div key={`h-${i}`} style={headingStyle[level]}>{renderInlineMd(h[2], `h-${i}`)}</div>);
+      i += 1;
+      continue;
+    }
+
+    // Unordered list item
+    if (/^[-*]\s+/.test(trimmed)) {
+      const content = trimmed.replace(/^[-*]\s+/, '');
+      blocks.push(<li key={`li-${i}`} style={{ marginLeft: '18px', marginBottom: '4px', listStyleType: 'square', color: '#c5c6c7', fontSize: '12px', lineHeight: '1.45' }}>{renderInlineMd(content, `li-${i}`)}</li>);
+      i += 1;
+      continue;
+    }
+
+    // Ordered list item
+    const num = line.match(/^\s*(\d+)\.\s+(.*)$/);
+    if (num) {
+      blocks.push(
+        <div key={`num-${i}`} style={{ display: 'flex', marginLeft: '12px', marginBottom: '6px', color: '#c5c6c7', fontSize: '12px', lineHeight: '1.45' }}>
+          <span style={{ color: '#66fcf1', marginRight: '6px', fontWeight: 'bold' }}>{num[1]}.</span>
+          <span>{renderInlineMd(num[2], `num-${i}`)}</span>
+        </div>
+      );
+      i += 1;
+      continue;
+    }
+
+    // Blank line -> vertical spacing
+    if (trimmed === '') {
+      blocks.push(<div key={`sp-${i}`} style={{ height: '8px' }} />);
+      i += 1;
+      continue;
+    }
+
+    // Paragraph
+    blocks.push(<p key={`p-${i}`} style={{ marginBottom: '6px', lineHeight: '1.45', color: '#c5c6c7', fontSize: '12px' }}>{renderInlineMd(line, `p-${i}`)}</p>);
+    i += 1;
+  }
+  return blocks;
 };
 
 const CONDITION_TYPES = ['Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy'];

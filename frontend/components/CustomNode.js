@@ -34,20 +34,11 @@ const CustomNode = ({ data, isConnectable }) => {
 
   return (
     <div className={`custom-node node-${nodeTypeClass} ${highlighted ? 'highlighted' : ''}`}>
-      {/* Target handle at the top */}
-      <Handle
-        type="target"
-        position={Position.Top}
-        isConnectable={isConnectable}
-        style={{ background: '#555', borderRadius: '4px' }}
-      />
-      {/* Target handle at the left */}
-      <Handle
-        type="target"
-        position={Position.Left}
-        isConnectable={isConnectable}
-        style={{ background: '#555', borderRadius: '4px' }}
-      />
+      {/* Top: incoming from the patient above (conditions/medications connect here) */}
+      <Handle id="tt" type="target" position={Position.Top} isConnectable={isConnectable} style={{ background: '#555', borderRadius: '3px' }} />
+      {/* Left & right carry same-level sibling (patient↔patient) links, either direction */}
+      <Handle id="lt" type="target" position={Position.Left} isConnectable={isConnectable} style={{ background: '#555', borderRadius: '3px' }} />
+      <Handle id="ls" type="source" position={Position.Left} isConnectable={isConnectable} style={{ background: '#555', borderRadius: '3px' }} />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <div className="node-icon-container">
@@ -59,20 +50,11 @@ const CustomNode = ({ data, isConnectable }) => {
         </div>
       </div>
 
-      {/* Source handle at the bottom */}
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        isConnectable={isConnectable}
-        style={{ background: '#555', borderRadius: '4px' }}
-      />
-      {/* Source handle at the right */}
-      <Handle
-        type="source"
-        position={Position.Right}
-        isConnectable={isConnectable}
-        style={{ background: '#555', borderRadius: '4px' }}
-      />
+      {/* Bottom: outgoing to this node's own conditions/medications below */}
+      <Handle id="bs" type="source" position={Position.Bottom} isConnectable={isConnectable} style={{ background: '#555', borderRadius: '3px' }} />
+      {/* Right: same-level sibling links, either direction */}
+      <Handle id="rt" type="target" position={Position.Right} isConnectable={isConnectable} style={{ background: '#555', borderRadius: '3px' }} />
+      <Handle id="rs" type="source" position={Position.Right} isConnectable={isConnectable} style={{ background: '#555', borderRadius: '3px' }} />
     </div>
   );
 };
