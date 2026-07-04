@@ -176,7 +176,7 @@ export default function LoginPage() {
         <h1 className="login-brand-title">MedTree</h1>
         <p className="login-brand-tagline">
           Map your family's medical history.<br />
-          Uncover hidden drug risks before they happen.
+          Uncover hidden risks before they happen.
         </p>
       </div>
 

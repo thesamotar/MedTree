@@ -481,7 +481,7 @@ const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], re
     }
     
     const loaderMsgId = `loader-${Date.now()}`;
-    setHistory(prev => [...prev, { id: loaderMsgId, sender: 'system', text: 'Parsing note clinical details with Cognee AI...' }]);
+    setHistory(prev => [...prev, { id: loaderMsgId, sender: 'system', text: 'Parsing note clinical details with Cognee...' }]);
     
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -673,7 +673,7 @@ const ChatPane = ({ onAnalyze, isLoading, profiles = [], medicalRecords = [], re
         </div>
         <div className="chat-badge">
           <Sparkles size={12} />
-          Cognee + AI
+          Cognee
         </div>
       </div>
 
