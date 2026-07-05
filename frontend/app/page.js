@@ -67,10 +67,14 @@ export default function Home() {
       .select('*');
     setRelationships(rels || []);
 
-    // 4. Fetch clinical notes logs
+    // 4. Fetch clinical notes logs — ONLY this user's own notes. RLS would otherwise return
+    // connected relatives' notes too (the same transitive consent that shares records for the
+    // graph), which over-shares the raw note log across accounts. The derived records/semantic
+    // facts remain shared for multi-hop analysis; only the visible note log is scoped to self.
     const { data: notes } = await supabase
       .from('clinical_notes')
       .select('*')
+      .eq('patient_id', currUser.id)
       .order('created_at', { ascending: false });
     setClinicalNotes(notes || []);
 
