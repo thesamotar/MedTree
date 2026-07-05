@@ -31,6 +31,23 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v4.0 — Deployment: Vercel (frontend) + Render (backend) (2026-07-05)
+
+**Backend (`/backend`)**
+- `main.py` — CORS origins are now **env-driven** via `ALLOWED_ORIGINS` (comma-separated) instead of hardcoded localhost, so the deployed Vercel domain is allowed without a code change.
+- `main.py` — Added a `GET /health` liveness endpoint for the host's health checks (Render).
+- `main.py` — The `__main__` entrypoint now honours the host-injected `$PORT` and makes auto-reload opt-in (`DEV_RELOAD`), so reload never runs in production.
+- `main.py` — Added a **cold-start self-heal**: `_remember_user_graph()` rebuilds a user's Cognee dataset on demand, and `POST /api/analyze-user` calls it to rebuild + retry the graph `recall` if the dataset is missing/empty. Free-tier hosts wipe the ephemeral disk on restart; since the graph is derived from Supabase, it rebuilds without a manual "Generate Tree".
+- `Dockerfile` — New. Pins **Python 3.12** (not all Cognee wheels are available on 3.14) and points Cognee's data/system/cache roots at `/data` for an optional persistent disk.
+- `requirements.txt` — Pinned to the tested versions (cognee 1.2.2, anthropic 0.113.0, fastapi 0.138.2, pydantic 2.12.5, google-genai 2.10.0, uvicorn 0.49.0).
+- `.dockerignore` — New. Keeps the local venv and Cognee state out of the image.
+
+**Deploy config (root)**
+- `render.yaml` — New Render Blueprint for the backend (Docker web service, free plan, `/health` check). Cognee's LLM/embeddings run on **OpenAI** (`LLM_API_KEY` — Cognee's name for the OpenAI key — and `LLM_MODEL`); the clinical thesis runs on Claude (`ANTHROPIC_API_KEY` / `CLAUDE_MODEL`); Gemini is an optional LLM fallback.
+
+**Frontend (`/frontend`)**
+- `.env.local.example` — Documented `NEXT_PUBLIC_API_URL` (points the frontend at the deployed backend; falls back to `http://localhost:8000`). Set it to the Render URL on Vercel, and set the Vercel Root Directory to `frontend`.
+
 ### v3.9 — Migrate to the Cognee 1.0 Memory API (remember / recall / improve / forget) (2026-07-05)
 
 **Backend (`/backend`)**
