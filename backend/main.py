@@ -52,6 +52,32 @@ def health_check():
     """Lightweight liveness probe for the host's health checks (Render, etc.)."""
     return {"status": "ok"}
 
+
+# Cognee stores its metadata in a relational DB whose tables must be created once via
+# setup(). A fresh/ephemeral container (e.g. a free-tier restart) starts with an empty DB,
+# so without this the first get_default_user()/remember() fails with DatabaseNotCreatedError.
+# setup() is idempotent, so we run it at startup AND lazily before any Cognee op in case the
+# startup hook didn't complete (or the DB was recreated).
+_cognee_setup_done = False
+
+
+async def _ensure_cognee_setup():
+    global _cognee_setup_done
+    if _cognee_setup_done:
+        return
+    from cognee.modules.engine.operations.setup import setup as cognee_setup
+    await cognee_setup()
+    _cognee_setup_done = True
+    print("Cognee setup() complete — relational tables ready.")
+
+
+@app.on_event("startup")
+async def _startup_init_cognee():
+    try:
+        await _ensure_cognee_setup()
+    except Exception as e:
+        print(f"Cognee setup() at startup failed (non-fatal, will retry lazily): {e}")
+
 # Initialize Anthropic client
 anthropic_key = os.getenv("ANTHROPIC_API_KEY")
 anthropic_client = None
@@ -546,6 +572,7 @@ async def analyze_user_query(request: UserQueryRequest):
         from cognee.api.v1.search import SearchType
         from cognee.modules.users.methods import get_default_user
 
+        await _ensure_cognee_setup()
         dataset_name = f"user_{request.user_id}"
         user = await get_default_user()
         print(f"Cognee graph recall on dataset: {dataset_name}")
@@ -658,6 +685,8 @@ async def _remember_user_graph(user_id: str, user_data: "UserData") -> bool:
     import cognee
     from cognee.modules.users.methods import get_default_user
 
+    await _ensure_cognee_setup()
+
     dummy = UserQueryRequest(query="", user_id=user_id, user_data=user_data)
     graph_context = build_context_from_user_data(dummy)
     if "Person:" not in graph_context:
@@ -688,7 +717,9 @@ async def build_graph(request: BuildGraphRequest):
         from cognee.context_global_variables import set_database_global_context_variables
         from cognee.modules.users.methods import get_default_user
         from cognee.infrastructure.databases.relational import get_relational_engine
-        
+
+        await _ensure_cognee_setup()
+
         # 1. Build text context from user data
         dummy_query_request = UserQueryRequest(query="", user_id=request.user_id, user_data=request.user_data)
         graph_context = build_context_from_user_data(dummy_query_request)
