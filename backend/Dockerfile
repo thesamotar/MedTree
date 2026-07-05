@@ -29,5 +29,8 @@ ENV DATA_ROOT_DIRECTORY=/data/.data_storage \
 EXPOSE 8000
 
 # $PORT is injected by the host; default to 8000 for local `docker run`.
-# Ensure the persistent-disk subdirs exist before Cognee touches them.
-CMD ["sh", "-c", "mkdir -p \"$DATA_ROOT_DIRECTORY\" \"$SYSTEM_ROOT_DIRECTORY\" \"$CACHE_ROOT_DIRECTORY\" \"$COGNEE_LOGS_DIR\" && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Ensure Cognee's storage dirs exist before it touches them. Crucially, the SQLite
+# relational engine does NOT create its own directory for local paths (only the graph and
+# vector adapters do), so we must pre-create <system_root>/databases or the first
+# remember()/cognify() fails with "unable to open database file".
+CMD ["sh", "-c", "mkdir -p \"$DATA_ROOT_DIRECTORY\" \"$SYSTEM_ROOT_DIRECTORY/databases\" \"$CACHE_ROOT_DIRECTORY\" \"$COGNEE_LOGS_DIR\" && uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
