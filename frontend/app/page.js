@@ -6,7 +6,7 @@ import { createClient } from '@/utils/supabase/client';
 import GraphPane from '@/components/GraphPane';
 import ChatPane from '@/components/ChatPane';
 import DataEntryPane from '@/components/DataEntryPane';
-import { LogOut, ArrowLeft, ArrowRight, Activity } from 'lucide-react';
+import { LogOut, ArrowLeft, ArrowRight, Activity, RefreshCw } from 'lucide-react';
 
 export default function Home() {
   const router = useRouter();
@@ -223,6 +223,7 @@ export default function Home() {
             'Symptom': 'Symptom',
             'Allergy': 'Risk',
             'Chronic': 'AutoimmuneCondition',
+            'Infection': 'Infection',
           };
           nodes.push({
             id: conceptId,
@@ -260,13 +261,14 @@ export default function Home() {
     // virtual condition nodes attached to the real relative (matched by name), or to a
     // virtual person node if the relative has no profile. Kept in sync with the backend
     // parser (FAMILY_FACT_RE / build_traversal_path_from_user_data in main.py).
-    const familyFactRegex = /^(.+?) has (?:(Genetic|Autoimmune|Chronic|Symptom|Allergy) )?(condition|medication): (.+)$/i;
+    const familyFactRegex = /^(.+?) has (?:(Genetic|Autoimmune|Chronic|Symptom|Allergy|Infection) )?(condition|medication): (.+)$/i;
     const condTypeMap = {
       Genetic: 'GeneticCondition',
       Autoimmune: 'AutoimmuneCondition',
       Symptom: 'Symptom',
       Allergy: 'Risk',
       Chronic: 'AutoimmuneCondition',
+      Infection: 'Infection',
     };
     (facts || []).forEach((factText) => {
       const m = familyFactRegex.exec((factText || '').trim());
@@ -479,6 +481,25 @@ export default function Home() {
     }
   };
 
+  // Regenerate: wipe this user's Cognee dataset (in case it was poisoned/stale from an early
+  // build) via the forget-based reset, then rebuild it cleanly from current data.
+  const handleRegenerate = async () => {
+    if (!user || isBuildingGraph) return;
+    setIsBuildingGraph(true);
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      await fetch(`${apiUrl}/api/graph/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: user.id }),
+      });
+    } catch (err) {
+      console.error('Graph reset failed (non-fatal, rebuilding anyway):', err);
+    }
+    // handleBuildGraph manages its own building state + rebuilds the view.
+    await handleBuildGraph();
+  };
+
   if (authLoading) {
     return (
       <div className="loading-screen">
@@ -496,6 +517,17 @@ export default function Home() {
           {appState === 'results' && (
             <button className="topbar-btn" onClick={handleBackToEntry}>
               <ArrowLeft size={16} /> Back to Data Entry
+            </button>
+          )}
+          {appState === 'results' && isGraphBuilt && (
+            <button
+              className="topbar-btn"
+              onClick={handleRegenerate}
+              disabled={isBuildingGraph}
+              title="Wipe and rebuild this graph (use if the graph looks stale or broken)"
+            >
+              <RefreshCw size={14} className={isBuildingGraph ? 'animate-spin' : ''} />
+              {isBuildingGraph ? 'Regenerating…' : 'Regenerate Graph'}
             </button>
           )}
           {appState === 'entry' && isGraphBuilt && (

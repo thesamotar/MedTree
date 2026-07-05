@@ -226,7 +226,7 @@ def build_context_from_user_data(query_request: UserQueryRequest) -> str:
 # flow, e.g. "Mamata Patra has Genetic condition: RYR1 Mutation". Groups:
 # 1=subject name, 2=condition_type (optional), 3=record_type, 4=condition/medication name.
 FAMILY_FACT_RE = re.compile(
-    r'^(.+?) has (?:(Genetic|Autoimmune|Chronic|Symptom|Allergy) )?(condition|medication): (.+)$',
+    r'^(.+?) has (?:(Genetic|Autoimmune|Chronic|Symptom|Allergy|Infection) )?(condition|medication): (.+)$',
     re.IGNORECASE,
 )
 
@@ -249,8 +249,14 @@ def _record_query_matches(rec_name_lower: str, query_lower: str) -> bool:
         triggers = ["codeine", "prodrug", "tramadol", "metabolizer", "genetic", "hereditary", "inherited", "history", "risk"]
     elif "psoriasis" in rec_name_lower or "arthritis" in rec_name_lower:
         triggers = ["joints", "stiff", "rheumatology", "psoriatic", "genetic", "hereditary", "inherited", "history", "risk"]
-    elif "mold" in rec_name_lower or "tuberculosis" in rec_name_lower or "tb" in rec_name_lower:
-        triggers = ["cough", "respiratory", "breathing", "lung", "apartment", "apartment_3b", "apartment_2b"]
+    elif any(k in rec_name_lower for k in
+             ["tuberculosis", "influenza", "covid", "conjunctivitis", "scabies", "hepatitis",
+              "measles", "chickenpox", "infection", "infectious", "contagious", "mold"]):
+        # Contagious/transmissible conditions — a cohabiting query ("infection", "exposure",
+        # "roommate", "shared", etc.) should surface the shared-residence transmission risk.
+        triggers = ["infection", "infectious", "contagious", "transmissible", "transmit",
+                    "exposure", "exposed", "catch", "roommate", "cohabit", "shared", "live",
+                    "living", "cough", "respiratory", "breathing", "lung", "risk"]
 
     return any(t in query_lower for t in triggers)
 
@@ -420,50 +426,74 @@ def build_traversal_path_from_user_data(query_request: UserQueryRequest) -> dict
 
 # Shared system prompt for clinical reasoning (used by both Claude and Gemini)
 CLINICAL_SYSTEM_PROMPT = (
-    "You are a clinical decision-support assistant. Explain your findings in clear, plain "
-    "language that a busy clinician — or an informed patient — can understand at a glance. "
-    "You are given a patient's connected medical picture: their family relationships, "
-    "conditions, medications, and any shared living arrangements.\n\n"
-    "Find the single most important hidden or multi-step risk (an inherited/genetic risk, a "
-    "dangerous drug interaction, a shared environmental hazard, or a cluster of related "
-    "conditions) and explain it simply.\n\n"
-    "Reply in Markdown using these short sections and nothing else:\n"
+    "You are a clinical decision-support assistant. ANSWER THE SPECIFIC QUESTION THE USER ASKED, "
+    "in clear, plain language a busy clinician — or an informed patient — can understand.\n\n"
+    "You are given a patient's connected medical picture: family relationships, conditions, "
+    "medications, and any shared living arrangements.\n\n"
+    "Follow this procedure exactly:\n"
+    "STEP 1 — Identify the TOPIC of the question (e.g. 'allergy/infection', 'a specific "
+    "anaesthetic', 'hereditary/anaesthetic risk before surgery', 'medication interaction').\n"
+    "STEP 2 — Consider ONLY findings that are on that topic. Ignore everything else in the data, "
+    "no matter how serious it is.\n"
+    "STEP 3 — If there are NO findings on the topic asked, your ENTIRE response is a single Bottom "
+    "line stating that nothing relevant was found. Do NOT add a Risk pathway. Do NOT add "
+    "recommendations. Do NOT write 'However...' or otherwise introduce a different condition (for "
+    "example, never bring up malignant hyperthermia in answer to an allergy or infection question). "
+    "Surfacing an unrelated risk the user did not ask about is a FAILURE. They can ask about it "
+    "separately.\n"
+    "STEP 4 — If there ARE findings on the topic, answer about ONLY that topic using the sections "
+    "below.\n"
+    "These four steps are your PRIVATE reasoning: NEVER print 'STEP 1/2/3/4', step numbers, or "
+    "headings like 'Topic identification' in your reply. Your visible answer must contain only the "
+    "Markdown sections defined below.\n"
+    "Use only the information provided; if it is insufficient to answer the topic, say so and name "
+    "what is missing. Never invent details.\n\n"
+    "Reply in Markdown using these sections:\n"
     "### Bottom line\n"
-    "One or two plain-English sentences: what the key risk is and what to do about it.\n\n"
+    "One or two plain-English sentences that directly answer the question.\n\n"
     "### Risk pathway\n"
-    "Show HOW the risk reaches the patient, step by step, so a clinician can follow the chain of "
-    "reasoning across the family. Use a numbered list where each step is a complete, plain-English "
-    "sentence that names the person, how they are related to the patient, and the relevant clinical "
-    "finding. For example:\n"
-    "1. The patient's grandmother had a severe, life-threatening reaction under general anaesthesia.\n"
-    "2. The patient's mother was confirmed to carry the RYR1 gene change (which causes that reaction).\n"
-    "3. Because this trait is inherited (autosomal dominant), the patient has about a 50% chance of "
-    "carrying it too.\n"
-    "4. The drugs planned for surgery (sevoflurane, succinylcholine) are known triggers of that "
-    "reaction.\n"
-    "Keep every step a real sentence — do NOT use arrow-only diagrams, code blocks, or database IDs.\n\n"
+    "INCLUDE THIS SECTION ONLY IF answering the question depends on a connection across people or "
+    "records. When included, show how the relevant finding reaches the patient, step by step, as a "
+    "numbered list of complete plain-English sentences that name each person, how they relate to the "
+    "patient, and the relevant finding (e.g. '1. The patient's grandmother had a severe reaction "
+    "under anaesthesia. 2. The patient's mother carries the RYR1 gene change...'). If the question is "
+    "answered by a single fact with no chain, OMIT this section entirely. Never use arrow-only "
+    "diagrams, code blocks, or database IDs.\n\n"
     "### Recommended next steps\n"
-    "A short Markdown table with columns 'Action', 'Urgency', 'Why'. In the Urgency column use "
-    "exactly one of: CRITICAL, URGENT, MEDIUM, LOW.\n\n"
-    "Rules: Keep it concise. The FIRST time you use a medical term or abbreviation, add a brief "
-    "plain-language explanation in parentheses (e.g. 'malignant hyperthermia (a life-threatening "
-    "reaction to certain anaesthetic drugs)'). Be direct about severity but not alarmist. Base your "
-    "answer only on the information provided; if it is insufficient, say so instead of inventing "
-    "details."
+    "A short Markdown table with columns 'Action', 'Urgency', 'Why', with actions relevant to the "
+    "question. In the Urgency column use exactly one of: CRITICAL, URGENT, MEDIUM, LOW.\n\n"
+    "Keep it concise. The FIRST time you use a medical term or abbreviation, add a brief plain-"
+    "language explanation in parentheses. Be direct about severity but not alarmist."
 )
 
 
 def _extract_cognee_context(results) -> str:
-    """Pull the human-readable text out of Cognee search results and strip internal markers
-    (content delimiters, index-field tags, node/connection headers) so the clinical LLM is
-    given clean facts rather than raw database tokens."""
+    """Pull the human-readable text out of Cognee recall/search results and strip internal
+    markers (content delimiters, index-field tags, node/connection headers) so the clinical
+    LLM is given clean facts rather than raw database tokens. Handles Cognee 1.0 `recall`
+    response entries — graph context on `.content`, graph hits on `.text` — as well as the
+    older `search` dict shape."""
     items = results if isinstance(results, list) else [results]
     parts = []
     for r in items:
-        if isinstance(r, dict):
-            parts.append(str(r.get("search_result") or r.get("context") or r.get("text") or ""))
-        else:
-            parts.append(str(r))
+        piece = ""
+        # Cognee 1.0 recall entries: graph_context/session_context -> .content, graph -> .text
+        for attr in ("content", "text"):
+            v = getattr(r, attr, None)
+            if isinstance(v, str) and v.strip():
+                piece = v
+                break
+        if not piece:
+            if isinstance(r, dict):
+                piece = str(r.get("search_result") or r.get("content") or r.get("text") or "")
+            else:
+                try:
+                    d = r.model_dump()
+                    piece = str(d.get("content") or d.get("text") or d.get("search_result") or "")
+                except Exception:
+                    piece = str(r)
+        if piece and piece.strip():
+            parts.append(piece)
     text = "\n".join(p for p in parts if p and p.strip())
     # Remove Cognee's internal formatting markers.
     text = text.replace("__node_content_start__", "").replace("__node_content_end__", "")
@@ -476,19 +506,15 @@ def _extract_cognee_context(results) -> str:
 async def analyze_user_query(request: UserQueryRequest):
     """Analyze a clinical query using the user's own medical data as graph context."""
     query = request.query
-    
-    # 1. BFS context from the live payload — kept only as a resilient fallback.
-    graph_context = build_context_from_user_data(request)
 
-    # --- COGNEE GRAPH RETRIEVAL (primary) ---
+    # --- 1. COGNEE GRAPH RETRIEVAL (primary; tried FIRST) ---
     # Route the query genuinely through Cognee's knowledge-graph memory, scoped to THIS
     # user's dataset (via datasets=/user=, the same scoping /build-graph relies on).
     # only_context=True returns the graph-derived context Cognee retrieves for the query —
     # the relevant entities/relationships it linked across every ingested note, including
     # semantic bridges (e.g. RYR1 -> malignant hyperthermia -> triggering agents) that no
-    # keyword/BFS pass would find. We then hand that context to the clinical LLM. We fall
-    # back to the BFS context only if Cognee has nothing (graph not built yet) or errors.
-    cognee_context = graph_context
+    # keyword/BFS pass would find. The clinical LLM then reasons over this.
+    cognee_context = None
     retrieval_source = "bfs-fallback"
     try:
         import cognee
@@ -497,8 +523,11 @@ async def analyze_user_query(request: UserQueryRequest):
 
         dataset_name = f"user_{request.user_id}"
         user = await get_default_user()
-        print(f"Cognee graph retrieval on dataset: {dataset_name}")
-        results = await cognee.search(
+        print(f"Cognee graph recall on dataset: {dataset_name}")
+        # recall() is Cognee 1.0's retrieval API. We pin GRAPH_COMPLETION for graph-based
+        # multi-hop retrieval; only_context=True returns the retrieved graph context (as
+        # recall entries with .text/.content) which the clinical LLM then reasons over.
+        results = await cognee.recall(
             query_text=query,
             query_type=SearchType.GRAPH_COMPLETION,
             datasets=[dataset_name],
@@ -507,18 +536,28 @@ async def analyze_user_query(request: UserQueryRequest):
             top_k=20,
         )
         retrieved = _extract_cognee_context(results)
-        if retrieved.strip():
+        # Reject empty OR degenerate content — e.g. a graph that was accidentally built from
+        # the "Requester profile not found." sentinel (a too-fast build with no valid payload).
+        low = retrieved.lower()
+        degenerate = (
+            not retrieved.strip()
+            or "requester profile not found" in low
+            or "no medical data provided" in low
+        )
+        if not degenerate:
             cognee_context = retrieved
             retrieval_source = "cognee-graph"
-            print(f"Cognee retrieval OK ({len(retrieved)} chars from graph)")
+            print(f"Cognee recall OK ({len(retrieved)} chars from graph)")
         else:
-            print("Cognee retrieval returned no context; using BFS fallback.")
+            print("Cognee recall returned empty/stale context; will use BFS fallback from live payload.")
     except Exception as e:
-        print(f"Cognee search failed: {e}; using BFS fallback.")
-        cognee_context = graph_context
-    # ----------------------------------------
+        print(f"Cognee recall failed: {e}; will use BFS fallback.")
 
-    # 2. Build traversal path (visual highlight only)
+    # --- 2. BFS fallback: only built if Cognee returned nothing usable ---
+    if cognee_context is None:
+        cognee_context = build_context_from_user_data(request)
+
+    # 3. Build traversal path (visual highlight only)
     traversal_path = build_traversal_path_from_user_data(request)
     
     # 3. Call LLM for reasoning (Claude → Gemini → Mock fallback)
@@ -581,29 +620,41 @@ async def build_graph(request: BuildGraphRequest):
         # 1. Build text context from user data
         dummy_query_request = UserQueryRequest(query="", user_id=request.user_id, user_data=request.user_data)
         graph_context = build_context_from_user_data(dummy_query_request)
-        
+
+        # Guard: never cognify a degenerate context. If the requester's profile isn't in the
+        # payload (e.g. Generate clicked before data finished loading), build_context returns
+        # a sentinel like "Requester profile not found." — cognifying that poisons the graph so
+        # every later recall returns the error. Fail loudly instead of building garbage.
+        if "Person:" not in graph_context:
+            raise HTTPException(
+                status_code=400,
+                detail=("No valid patient data to build the graph. Wait until the tree shows "
+                        "your family/records (data finished loading), then Generate again."),
+            )
+
         dataset_name = f"user_{request.user_id}"
         user = await get_default_user()
 
-        # Scoped rebuild: empty ONLY this user's dataset instead of a global prune.
-        # A global prune_system()/prune_data() would wipe every user's graph. Worse,
-        # prune_system() alone leaves the relational data-item records behind, so on a
-        # rebuild cognee.add() deduplicates the identical content by hash and cognify()
-        # skips it, leaving the graph empty. empty_dataset() clears this dataset's graph
-        # nodes/edges AND its data-item records, so the re-added content is reprocessed,
-        # while other users' datasets are left untouched.
-        print(f"Clearing existing Cognee dataset: {dataset_name}")
-        existing = await cognee.datasets.list_datasets(user)
-        for d in existing:
-            if d.name == dataset_name:
-                await cognee.datasets.empty_dataset(d.id, user)
+        # Scoped rebuild via the Cognee 1.0 memory API. forget(dataset=...) removes ONLY this
+        # user's dataset (graph nodes/edges + vector entries + data items), so the re-stored
+        # content isn't deduplicated/skipped and other users' datasets are left untouched.
+        # remember() then stores the data and builds the graph in one call (add + cognify).
+        print(f"Forgetting existing Cognee dataset: {dataset_name}")
+        try:
+            await cognee.forget(dataset=dataset_name, user=user)
+        except Exception as forget_err:
+            print(f"cognee.forget (pre-build) non-fatal: {forget_err}")
 
-        print(f"Adding new data to dataset: {dataset_name}")
-        await cognee.add(data=graph_context, dataset_name=dataset_name)
+        print(f"Remembering data for dataset: {dataset_name}")
+        await cognee.remember(data=graph_context, dataset_name=dataset_name)
 
-        # Scope cognify to this dataset so we don't reprocess unrelated stale datasets.
-        print("Cognifying graph...")
-        await cognee.cognify(datasets=[dataset_name])
+        # improve() enriches the freshly built graph with derived context/rules — optional,
+        # so a failure here must not break the build.
+        try:
+            print("Improving (enriching) graph...")
+            await cognee.improve(dataset=dataset_name)
+        except Exception as improve_err:
+            print(f"cognee.improve non-fatal: {improve_err}")
         
         # Fetch the visual graph nodes & edges directly from Cognee.
         # cognify() runs inside a scoped ContextVar that points the graph engine
@@ -611,7 +662,7 @@ async def build_graph(request: BuildGraphRequest):
         # is released, so we must re-establish it before calling get_graph_engine().
         print("Retrieving visual graph data...")
 
-        # Look up the dataset ID that cognee.add() created for our dataset_name
+        # Look up the dataset ID that remember() created for our dataset_name
         from cognee.modules.data.models import Dataset
         from sqlalchemy import select
         engine = get_relational_engine()
@@ -641,6 +692,8 @@ async def build_graph(request: BuildGraphRequest):
             "nodes": nodes or [],
             "edges": edges or []
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Failed to build Cognee graph: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -668,12 +721,12 @@ async def analyze_query(request: QueryRequest):
     try:
         import cognee
         from cognee.api.v1.search import SearchType
-        # Perform query on Cognee graph
-        results = await cognee.search(query_text=request.query, query_type=SearchType.GRAPH_COMPLETION)
+        # Retrieve context from Cognee's knowledge graph (Cognee 1.0 recall API).
+        results = await cognee.recall(query_text=request.query, query_type=SearchType.GRAPH_COMPLETION)
         if results:
-            cognee_context = str(results)
+            cognee_context = _extract_cognee_context(results)
     except Exception as e:
-        print(f"Cognee search failed/not initialized: {e}")
+        print(f"Cognee recall failed/not initialized: {e}")
         # Build mock context based on query to pass to Claude
         if any(w in query for w in ["codeine", "alex", "jensen"]):
             cognee_context = "Found node: Alex Jensen (Patient). Relation: CHILD_OF -> Sarah Jensen (Patient). Node: Sarah Jensen HAS_CONDITION -> CYP2D6 Deficiency. CYP2D6 metabolizes Codeine. Mother experiences toxicity and lack of pain relief."
@@ -828,6 +881,10 @@ class RemoveNoteRequest(BaseModel):
     user_id: str
     note_id: int
 
+class ResetGraphRequest(BaseModel):
+    user_id: str | None = None
+    everything: bool = False
+
 async def call_llm_json(system_prompt: str, user_content: str) -> dict:
     """Helper to query the available LLM and return parsed JSON."""
     response_text = ""
@@ -908,12 +965,13 @@ async def parse_clinical_note(request: ParseNoteRequest):
         "  * 'record_type': 'condition' or 'medication'.\n"
         "  * 'name': The clean name of the medication or condition (e.g. 'Plaque Psoriasis', 'Sevoflurane').\n"
         "  * 'metadata': A dictionary. For conditions, you MUST include a 'condition_type' field set to exactly one of: "
-        "'Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy'. Use these classification rules:\n"
+        "'Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy', 'Infection'. Use these classification rules:\n"
         "    - 'Genetic': Inherited genetic markers or deficiencies (e.g. CYP2D6 Deficiency, Malignant Hyperthermia Susceptibility, Sickle Cell Trait).\n"
         "    - 'Autoimmune': Autoimmune diseases (e.g. Psoriasis, Lupus, Rheumatoid Arthritis, Crohn's Disease).\n"
         "    - 'Chronic': Chronic non-autoimmune conditions (e.g. Hypertension, Diabetes, COPD).\n"
         "    - 'Symptom': Acute symptoms or complaints (e.g. Joint Stiffness, Cough, Bilateral Knee Pain, Respiratory Distress).\n"
         "    - 'Allergy': Allergies or hypersensitivities (e.g. Penicillin Allergy, Latex Allergy).\n"
+        "    - 'Infection': Transmissible/contagious infections (e.g. Active Pulmonary Tuberculosis, Influenza, COVID-19, Conjunctivitis, Scabies).\n"
         "  For medications, include optional 'dosage' and 'status' (e.g. 'Active', 'Proposed').\n"
     )
     
@@ -936,19 +994,46 @@ async def add_facts_to_graph(request: AddFactsRequest):
     """Incrementally add new semantic facts to the Cognee graph without pruning existing data."""
     try:
         import cognee
-        
+
         dataset_name = f"user_{request.user_id}_note_{request.note_id}"
         facts_text = "\n".join(request.facts)
-        
-        print(f"Incrementally adding facts to Cognee dataset: {dataset_name}")
-        await cognee.add(data=facts_text, dataset_name=dataset_name)
-        
-        print(f"Cognifying new facts...")
-        await cognee.cognify()
-        
+
+        # remember() = add + cognify in one call (Cognee 1.0 memory API), scoped to this
+        # note's dataset so it doesn't reprocess unrelated datasets.
+        print(f"Remembering incremental facts for dataset: {dataset_name}")
+        await cognee.remember(data=facts_text, dataset_name=dataset_name)
+
         return {"success": True, "dataset": dataset_name, "facts_added": len(request.facts)}
     except Exception as e:
         print(f"Failed to add facts to Cognee: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/graph/reset")
+async def reset_graph(request: ResetGraphRequest):
+    """Forget Cognee memory (Cognee 1.0 forget API): a single user's dataset, or everything.
+    A clean, first-class reset — clears the graph + vector entries + data items so stale
+    facts can't reappear on the next build."""
+    try:
+        import cognee
+        from cognee.modules.users.methods import get_default_user
+
+        user = await get_default_user()
+        if request.everything:
+            result = await cognee.forget(everything=True, user=user)
+            target = "everything"
+        elif request.user_id:
+            target = f"user_{request.user_id}"
+            result = await cognee.forget(dataset=target, user=user)
+        else:
+            raise HTTPException(status_code=400, detail="Provide user_id or set everything=true")
+
+        print(f"Cognee forget complete: {target}")
+        return {"success": True, "forgot": target, "result": str(result)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Cognee forget failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/graph/remove-note")
@@ -959,22 +1044,15 @@ async def remove_note_from_graph(request: RemoveNoteRequest):
         import cognee
         from cognee.modules.users.methods import get_default_user
 
-        print(f"Deleting Cognee dataset: {dataset_name}")
-        # Scope deletion to this one dataset instead of prune_data(), which wipes ALL
-        # users' data. empty_dataset() removes the dataset's graph nodes/edges and its
-        # relational data-item records. (Note: this cognee version has no
-        # delete_dataset(); empty_dataset() is the supported per-dataset removal.)
+        print(f"Forgetting Cognee dataset: {dataset_name}")
+        # Scope removal to this one note's dataset with the Cognee 1.0 forget() API — it
+        # removes the dataset's graph nodes/edges, vector entries, and data items, and leaves
+        # every other user's data untouched.
         user = await get_default_user()
-        datasets = await cognee.datasets.list_datasets(user)
-        target = [d for d in datasets if d.name == dataset_name]
-        if target:
-            await cognee.datasets.empty_dataset(target[0].id, user)
-            return {"success": True, "pruned_dataset": dataset_name}
-        else:
-            print(f"Dataset '{dataset_name}' not found in Cognee, nothing to prune.")
-            return {"success": True, "pruned_dataset": dataset_name, "detail": "Dataset not found, may have already been removed."}
+        result = await cognee.forget(dataset=dataset_name, user=user)
+        return {"success": True, "pruned_dataset": dataset_name, "result": str(result)}
     except Exception as e:
-        print(f"Failed to prune Cognee dataset: {e}")
+        print(f"Failed to forget Cognee dataset: {e}")
         # Non-fatal: dataset may not exist if graph was never built for this note
         return {"success": False, "detail": str(e)}
 

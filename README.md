@@ -31,12 +31,24 @@ You can also use the root `package.json` shortcuts:
 
 ## Changelog
 
+### v3.9 — Migrate to the Cognee 1.0 Memory API (remember / recall / improve / forget) (2026-07-05)
+
+**Backend (`/backend`)**
+- `main.py` — `POST /api/build-graph` uses the Cognee 1.0 memory API end to end: `forget(dataset=…)` for a scoped reset of the user's dataset, `remember()` to store data and build the graph in one call, and `improve(dataset=…)` to enrich the freshly built graph (non-fatal if unavailable).
+- `main.py` — `POST /api/analyze-user` retrieves via `recall()`, scoped to the user's dataset with `only_context=True`. `_extract_cognee_context()` reads `recall`'s response entries (graph context on `.content`, graph hits on `.text`).
+- `main.py` — `POST /api/graph/add-facts` uses `remember()` to store and build a note's facts in one call; `POST /api/graph/remove-note` uses `forget(dataset=…)` scoped to that note's dataset.
+- `main.py` — Added `POST /api/graph/reset` — a first-class reset built on `forget()` that clears a single user's dataset (`{"user_id": "…"}`) or everything (`{"everything": true}`), removing graph + vector entries + data items so stale facts can't reappear on the next build.
+- `main.py` — Added an **Infection** condition type: the note-parser classifier and family-history parsing recognise it, and contagion/cohabitation trigger keywords (`infection`, `contagious`, `exposure`, `roommate`, `tuberculosis`, …) let a "risk of infection?" query surface a roommate's transmissible condition.
+
+**Frontend (`/frontend`)**
+- Added an **"Infection"** condition type end to end — the condition dropdowns, a Biohazard node icon (orange) and `.node-infection` styling — so a contagious condition renders and traverses the shared-residence path.
+
 ### v3.8 — Genuine Cognee Retrieval & Readable Clinical Output (2026-07-05)
 
 **Backend (`/backend`)**
-- `main.py` — `POST /api/analyze-user` now answers **genuinely through Cognee's graph retrieval** instead of quietly falling back to the manual BFS context. The `cognee.search` call is scoped to the user's dataset (`datasets=[...]`, `user=...`) — the missing scoping that previously made it return nothing — and uses `only_context=True` so Cognee's knowledge-graph retrieval supplies the context, which the clinical LLM then reasons over. The manual BFS context is now used only as a fallback when the graph is empty or Cognee errors.
+- `main.py` — `POST /api/analyze-user` now answers **genuinely through Cognee's graph retrieval** instead of quietly falling back to the manual BFS context. The `cognee.recall` call is scoped to the user's dataset (`datasets=[...]`, `user=...`) — the missing scoping that previously made it return nothing — and uses `only_context=True` so Cognee's knowledge-graph retrieval supplies the context, which the clinical LLM then reasons over. The manual BFS context is now used only as a fallback when the graph is empty or Cognee errors.
 - `main.py` — Added a `retrieval_source` field (`cognee-graph` vs `bfs-fallback`) to the response and surfaced it in `scenario_description`, so the UI honestly shows when an answer was produced from Cognee's graph.
-- `main.py` — Added `_extract_cognee_context()` to pull the human-readable text out of Cognee search results and strip internal markers (content delimiters, index-field tags, node/edge headers, raw IDs) before it reaches the LLM.
+- `main.py` — Added `_extract_cognee_context()` to pull the human-readable text out of Cognee `recall` results and strip internal markers (content delimiters, index-field tags, node/edge headers, raw IDs) before it reaches the LLM.
 - `main.py` — Rewrote `CLINICAL_SYSTEM_PROMPT` for plain, clinically-readable output with fixed sections: **Bottom line**, **Risk pathway** (a numbered, plain-English walk-through of the multi-hop family chain — no ASCII arrow diagrams or raw tokens), and **Recommended next steps** (a table with CRITICAL/URGENT/MEDIUM/LOW urgency). Medical terms are explained in parentheses on first use.
 
 ### v3.7 — Graph Layout, Navigation & Chat Formatting Polish (2026-07-04)
@@ -54,9 +66,9 @@ You can also use the root `package.json` shortcuts:
 ### v3.6 — Graph Rendering, Family-History Traversal & Live Update Fixes (2026-07-04)
 
 **Backend (`/backend`)**
-- `main.py` — Fixed the "No nodes found" empty-graph bug in `POST /api/build-graph`: `prune_system()` deleted the Ladybug graph files but left the relational data-item records, so re-added content was deduplicated by hash and skipped by `cognify()`. Cleanup is now **scoped to the user's own dataset** via `cognee.datasets.empty_dataset()` (clears both the dataset's graph nodes/edges and its data-item records) instead of a global prune, and `cognify()` is scoped to that dataset. Other users' graphs are left untouched.
-- `main.py` — Re-established the per-user/per-dataset context (`set_database_global_context_variables`) before reading `get_graph_data()`, since the context that `cognify()` scopes the graph engine to is released when it returns.
-- `main.py` — Fixed `POST /api/graph/remove-note`, which called a non-existent `cognee.datasets.delete_dataset()` and silently fell back to a global `prune_data()` (wiping all users). It now uses `empty_dataset()` scoped to the note's dataset.
+- `main.py` — Fixed the "No nodes found" empty-graph bug in `POST /api/build-graph`: a global reset left relational data-item records behind, so re-stored content was deduplicated by hash and left the knowledge graph empty. The rebuild is now **scoped to the user's own dataset** via `forget(dataset=…)` (clears the dataset's graph nodes/edges, vector entries, and data items) followed by `remember()`, so the re-stored content is reprocessed and other users' graphs are left untouched.
+- `main.py` — Re-established the per-user/per-dataset context (`set_database_global_context_variables`) before reading the built graph back, since the scoped context is released once the memory build returns.
+- `main.py` — Fixed `POST /api/graph/remove-note`, which previously fell back to a global reset (wiping all users). It now uses `forget(dataset=…)` scoped to that note's dataset.
 - `main.py` — Extended the Malignant Hyperthermia trigger list to include all volatile/triggering anesthetic agents (`desflurane`, `isoflurane`, `halothane`, `enflurane`, `succinylcholine`, …) so queries like "is desflurane safe" surface the MH susceptibility link. Refactored trigger matching into a shared `_record_query_matches()` helper.
 - `main.py` — Added family-history parsing to `build_traversal_path_from_user_data`: cross-account relative conditions (stored as structured `semantic_facts` text, e.g. "Mamata Patra has Genetic condition: RYR1 Mutation") are wired into the traversal graph as virtual condition nodes attached to the real relative, so an MH/anesthetic query traverses patient → relative → condition and excludes irrelevant branches.
 - `main.py` — Unified the backend `to_id()` slug function to exactly match the frontend `toId()` (`[^a-z0-9] → _`), preventing mismatched/orphan node IDs between the rendered graph and the highlight set.
@@ -97,12 +109,12 @@ You can also use the root `package.json` shortcuts:
 - `migration.sql` — Upgraded the 2-hop traversal limitation to a recursive CTE function `get_all_connected_profile_ids`, enabling genuine multi-hop queries to an infinite depth while preserving user privacy bounds.
 
 **Backend (`/backend`)**
-- `main.py` — Implemented the `/api/build-graph` endpoint to support isolated on-demand graph generation (utilizing `cognee.prune.prune_system()`, `cognee.add()`, and `cognee.cognify()`).
-- `main.py` — Optimized the `/api/analyze-user` endpoint to run only `cognee.search()`, reducing chat query response time down to milliseconds.
+- `main.py` — Implemented the `/api/build-graph` endpoint to support isolated on-demand graph generation (using `cognee.forget()` for a scoped reset and `cognee.remember()` to store + build).
+- `main.py` — Optimized the `/api/analyze-user` endpoint to run only `cognee.recall()`, reducing chat query response time down to milliseconds.
 
 **Frontend (`/frontend`)**
 - `page.js` & `ChatPane.js` — Placed the graph build action as a glowing circular brain button at the center of the Chat lock screen overlay, complete with a clean uppercase label beneath it.
-- `ChatPane.js` — Integrated an interactive progression bar that updates live with Cognee's compilation tasks (clearing cache, ingesting records, cognifying).
+- `ChatPane.js` — Integrated an interactive progression bar that updates live with Cognee's memory-build tasks (clearing cache, ingesting records, building memory).
 - `GraphPane.js` — Implemented an initial-state view when no query is active, displaying only the logged-in patient and their direct medical/prescriptive nodes.
 - `GraphPane.js` & `globals.css` — Color-coded relationships (Orange), medical conditions (Purple), and medications (Green) with custom glowing path animation overrides.
 
@@ -123,8 +135,8 @@ You can also use the root `package.json` shortcuts:
 > This feature currently requires a paid OpenAI API key. The free-tier Gemini API key being used does not support the necessary LiteLLM embedding models (`text-embedding-004`) required by Cognee, resulting in a 404 error during real-time graph generation.
 
 **Backend (`/backend`)**
-- `main.py` — Refactored the `POST /api/analyze-user` endpoint to ingest dynamic Supabase JSON data directly into Cognee on the fly (`cognee.add()` and `cognee.cognify()`).
-- `main.py` — Updated the prompt builder to utilize `cognee.search(SearchType.GRAPH_COMPLETION)` instead of the manual Python BFS text representation.
+- `main.py` — Refactored the `POST /api/analyze-user` endpoint to ingest dynamic Supabase JSON data directly into Cognee on the fly (`cognee.remember()`).
+- `main.py` — Updated the prompt builder to utilize `cognee.recall(SearchType.GRAPH_COMPLETION)` instead of the manual Python BFS text representation.
 - `main.py` — Applied `os.environ` fallback logic to attempt dynamic Gemini overriding, but Litellm + Gemini embeddings fail without Google Cloud quota.
 
 ### v3.1 — Multi-Hop Transitive Traversal & Safe RLS Policies (2026-07-02)
@@ -201,7 +213,7 @@ You can also use the root `package.json` shortcuts:
 **Backend (`/backend`)**
 - `main.py` — FastAPI server with two endpoints:
   - `GET /api/graph` — Returns the full seeded graph structure (nodes + edges)
-  - `POST /api/analyze` — Accepts a clinical query, searches the Cognee graph for context, determines the traversal path, and calls Claude 3.5 for medical reasoning. Includes full mock/fallback responses when API keys are unavailable.
+  - `POST /api/analyze` — Accepts a clinical query, recalls context from the Cognee graph, determines the traversal path, and calls Claude 3.5 for medical reasoning. Includes full mock/fallback responses when API keys are unavailable.
 - `seed.py` — Cognee seeding script that ingests synthetic patient narratives into the graph memory layer. Gracefully falls back to writing a structured mock graph (`seeded_graph.json`) if no LLM API key is configured.
 - `data/mock_data.json` — Three pre-seeded multi-hop patient scenarios:
   1. **Pharmacogenomics**: Codeine + CYP2D6 hereditary deficiency

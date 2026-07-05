@@ -142,7 +142,7 @@ const renderMarkdown = (text) => {
   return blocks;
 };
 
-const CONDITION_TYPES = ['Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy'];
+const CONDITION_TYPES = ['Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy', 'Infection'];
 
 const NoteApprovalCard = ({ msg, msgIndex, setHistory, onDataChange, user }) => {
   const [checkedStates, setCheckedStates] = useState(

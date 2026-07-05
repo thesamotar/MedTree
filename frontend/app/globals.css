@@ -783,6 +783,8 @@ body {
 .node-environmentalfactor.highlighted { border-left-color: #ec4899; }
 .node-symptom { border-left: 4px solid #22d3ee; }
 .node-symptom.highlighted { border-left-color: #06b6d4; }
+.node-infection { border-left: 4px solid #fb923c; }
+.node-infection.highlighted { border-left-color: #f97316; }
 
 /* Highlighted edge animations by connection type */
 .react-flow__edge-path.highlighted-edge-relationship {

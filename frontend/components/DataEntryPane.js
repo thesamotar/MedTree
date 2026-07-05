@@ -5,7 +5,7 @@ import { createClient } from '@/utils/supabase/client';
 import { User, UserPlus, HeartPulse, Pill, Home, Plus, Trash2, ChevronDown, ChevronRight, Copy, Check, X, Eye, EyeOff, Brain } from 'lucide-react';
 
 const RELATIONSHIP_TYPES = ['Parent-Child', 'Roommate', 'Sibling-Sibling', 'Spouse'];
-const CONDITION_TYPES = ['Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy'];
+const CONDITION_TYPES = ['Genetic', 'Autoimmune', 'Chronic', 'Symptom', 'Allergy', 'Infection'];
 const MED_STATUSES = ['Active', 'Proposed', 'Discontinued'];
 
 const DataEntryPane = ({ userId, profile, profiles, medicalRecords, relationships, clinicalNotes = [], onDataChange, onBuildGraph, isBuildingGraph, isGraphBuilt }) => {

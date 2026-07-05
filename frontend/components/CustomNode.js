@@ -1,6 +1,6 @@
 import React from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { User, Pill, ShieldAlert, Dna, AlertTriangle, Home, Wind, Activity } from 'lucide-react';
+import { User, Pill, ShieldAlert, Dna, AlertTriangle, Home, Wind, Activity, Biohazard } from 'lucide-react';
 
 const CustomNode = ({ data, isConnectable }) => {
   const { label, type, highlighted } = data;
@@ -25,6 +25,8 @@ const CustomNode = ({ data, isConnectable }) => {
         return <Wind size={iconSize} style={{ color: '#f472b6' }} />;
       case 'symptom':
         return <ShieldAlert size={iconSize} style={{ color: '#22d3ee' }} />;
+      case 'infection':
+        return <Biohazard size={iconSize} style={{ color: '#fb923c' }} />;
       default:
         return <Activity size={iconSize} style={{ color: '#c5c6c7' }} />;
     }
