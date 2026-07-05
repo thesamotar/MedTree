@@ -1,0 +1,14 @@
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.env
+.env.*
+# Local Cognee state — the container builds its own on the mounted disk.
+.data_storage/
+.cognee_system/
+.cognee_cache/
+.cognee_logs/
+*.db
+.DS_Store

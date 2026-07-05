@@ -32,17 +32,25 @@ if (not openai_key or openai_key.startswith("your-")) and gemini_key and not gem
 
 app = FastAPI(title="MedTree Medical Correlation Engine API")
 
-# Enable CORS for Next.js frontend
+# Enable CORS for the Next.js frontend. Origins are env-driven so the deployed Vercel
+# domain(s) can be added without a code change: set ALLOWED_ORIGINS to a comma-separated
+# list (e.g. "https://medtree.vercel.app,https://medtree-git-main.vercel.app"). Falls back
+# to localhost for local dev.
+_default_origins = "http://localhost:3000,http://127.0.0.1:3000"
+allowed_origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+def health_check():
+    """Lightweight liveness probe for the host's health checks (Render, etc.)."""
+    return {"status": "ok"}
 
 # Initialize Anthropic client
 anthropic_key = os.getenv("ANTHROPIC_API_KEY")
@@ -530,7 +538,10 @@ async def analyze_user_query(request: UserQueryRequest):
     # keyword/BFS pass would find. The clinical LLM then reasons over this.
     cognee_context = None
     retrieval_source = "bfs-fallback"
-    try:
+
+    async def _recall_graph_context():
+        """Run one GRAPH_COMPLETION recall against this user's dataset; return usable
+        context or None if the dataset is empty/missing/degenerate."""
         import cognee
         from cognee.api.v1.search import SearchType
         from cognee.modules.users.methods import get_default_user
@@ -558,12 +569,30 @@ async def analyze_user_query(request: UserQueryRequest):
             or "requester profile not found" in low
             or "no medical data provided" in low
         )
-        if not degenerate:
-            cognee_context = retrieved
+        return None if degenerate else retrieved
+
+    try:
+        cognee_context = await _recall_graph_context()
+        if cognee_context is not None:
             retrieval_source = "cognee-graph"
-            print(f"Cognee recall OK ({len(retrieved)} chars from graph)")
+            print(f"Cognee recall OK ({len(cognee_context)} chars from graph)")
         else:
-            print("Cognee recall returned empty/stale context; will use BFS fallback from live payload.")
+            # Cold-start self-heal: on free/ephemeral hosting the container filesystem is
+            # wiped on restart, so this user's Cognee dataset can be gone. The graph is fully
+            # derived from the Supabase data in this very request, so rebuild it on demand and
+            # retry the recall once — no manual "Generate Tree" needed after a dyno restart.
+            print("Cognee dataset empty/missing; attempting on-demand rebuild from payload...")
+            try:
+                rebuilt = await _remember_user_graph(request.user_id, request.user_data)
+                if rebuilt:
+                    cognee_context = await _recall_graph_context()
+                    if cognee_context is not None:
+                        retrieval_source = "cognee-graph"
+                        print(f"Cognee recall OK after rebuild ({len(cognee_context)} chars).")
+                else:
+                    print("Payload had no valid patient data; skipping rebuild, using BFS fallback.")
+            except Exception as rebuild_err:
+                print(f"On-demand rebuild failed: {rebuild_err}; using BFS fallback.")
     except Exception as e:
         print(f"Cognee recall failed: {e}; will use BFS fallback.")
 
@@ -620,6 +649,35 @@ async def analyze_user_query(request: UserQueryRequest):
         "traversal_path": traversal_path,
         "scenario_description": f"{src_label}: {len(traversal_path['nodes'])} nodes, {len(traversal_path['edges'])} edges highlighted."
     }
+
+async def _remember_user_graph(user_id: str, user_data: "UserData") -> bool:
+    """Build (forget → remember → improve) a user's Cognee dataset from their payload.
+    Shared by the explicit build-graph endpoint and the lazy cold-start rebuild in the
+    query path. Returns True if the graph was (re)built, False if the payload was degenerate
+    (no valid patient data) so the caller can fall back instead of poisoning the graph."""
+    import cognee
+    from cognee.modules.users.methods import get_default_user
+
+    dummy = UserQueryRequest(query="", user_id=user_id, user_data=user_data)
+    graph_context = build_context_from_user_data(dummy)
+    if "Person:" not in graph_context:
+        return False
+
+    dataset_name = f"user_{user_id}"
+    user = await get_default_user()
+    try:
+        await cognee.forget(dataset=dataset_name, user=user)
+    except Exception as forget_err:
+        print(f"cognee.forget (pre-build) non-fatal: {forget_err}")
+
+    await cognee.remember(data=graph_context, dataset_name=dataset_name)
+
+    try:
+        await cognee.improve(dataset=dataset_name)
+    except Exception as improve_err:
+        print(f"cognee.improve non-fatal: {improve_err}")
+    return True
+
 
 @app.post("/api/build-graph")
 async def build_graph(request: BuildGraphRequest):
@@ -1072,4 +1130,8 @@ async def remove_note_from_graph(request: RemoveNoteRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    # Honour the host-provided $PORT (Render/Railway/Fly inject it); default to 8000 locally.
+    # Auto-reload is opt-in via DEV_RELOAD=true so it never runs in production.
+    port = int(os.getenv("PORT", "8000"))
+    reload = os.getenv("DEV_RELOAD", "false").lower() == "true"
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=reload)

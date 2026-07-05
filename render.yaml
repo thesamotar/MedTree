@@ -1,0 +1,27 @@
+# Render Blueprint for the MedTree backend (FastAPI + Cognee).
+# Free plan: no persistent disk and the instance spins down after ~15 min idle. That's fine
+# here — the Cognee graph is derived from Supabase, and the query path rebuilds it on demand
+# if the dataset is missing after a restart (see _remember_user_graph in backend/main.py).
+# To keep the graph persisted across restarts instead, switch plan to "starter" and add a
+# `disk:` block mounted at /data (the Dockerfile already points Cognee's stores there).
+services:
+  - type: web
+    name: medtree-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # Comma-separated list of allowed frontend origins — set to your Vercel URL(s).
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # Claude powers the clinical thesis.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Gemini powers Cognee's LLM extraction + embeddings (and is the LLM fallback).
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CLAUDE_MODEL
+        value: claude-3-5-sonnet-20240620
