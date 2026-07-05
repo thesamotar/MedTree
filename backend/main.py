@@ -238,25 +238,39 @@ def _record_query_matches(rec_name_lower: str, query_lower: str) -> bool:
     if any(w in query_lower for w in words if len(w) > 2) or (rec_name_lower and rec_name_lower in query_lower):
         return True
 
+    # Trigger keywords are DOMAIN-SPECIFIC on purpose. Generic clinical words ("risk",
+    # "history", "genetic", "hereditary", "inherited") were deliberately removed: they appear
+    # in almost every query ("am I at risk of X?"), so they matched every condition and lit up
+    # unrelated branches — e.g. a TB question also highlighting psoriasis / MH / osteoarthritis.
     triggers = []
     if "malignant hyperthermia" in rec_name_lower or "ryr1" in rec_name_lower or "hyperthermic" in rec_name_lower:
         # Any volatile/triggering anesthetic agent, so "is desflurane safe" surfaces the link.
         triggers = ["sevoflurane", "desflurane", "isoflurane", "halothane", "enflurane",
                     "succinylcholine", "suxamethonium", "volatile", "anesthetic", "anaesthetic",
-                    "anesthesia", "anaesthesia", "surgery", "operation", "ryr1", "genetic",
-                    "hereditary", "inherited", "history", "risk"]
+                    "anesthesia", "anaesthesia", "surgery", "operation", "malignant hyperthermia", "ryr1"]
     elif "cyp2d6" in rec_name_lower:
-        triggers = ["codeine", "prodrug", "tramadol", "metabolizer", "genetic", "hereditary", "inherited", "history", "risk"]
+        triggers = ["codeine", "prodrug", "tramadol", "metabolizer", "cyp2d6"]
     elif "psoriasis" in rec_name_lower or "arthritis" in rec_name_lower:
-        triggers = ["joints", "stiff", "rheumatology", "psoriatic", "genetic", "hereditary", "inherited", "history", "risk"]
+        triggers = ["joints", "stiff", "rheumatology", "psoriatic"]
     elif any(k in rec_name_lower for k in
              ["tuberculosis", "influenza", "covid", "conjunctivitis", "scabies", "hepatitis",
-              "measles", "chickenpox", "infection", "infectious", "contagious", "mold"]):
+              "measles", "chickenpox", "infection", "infectious", "contagious", "mold",
+              "pericoronitis"]):
         # Contagious/transmissible conditions — a cohabiting query ("infection", "exposure",
         # "roommate", "shared", etc.) should surface the shared-residence transmission risk.
         triggers = ["infection", "infectious", "contagious", "transmissible", "transmit",
-                    "exposure", "exposed", "catch", "roommate", "cohabit", "shared", "live",
-                    "living", "cough", "respiratory", "breathing", "lung", "risk"]
+                    "exposure", "exposed", "catch", "roommate", "cohabit", "shared",
+                    "cough", "respiratory", "breathing", "lung", "tuberculosis"]
+    elif any(k in rec_name_lower for k in
+             ["cough", "night sweat", "weight loss", "crackle", "hemoptysis", "sputum",
+              "haemoptysis", "fever"]):
+        # Constitutional / respiratory symptoms of a transmissible infection (classically TB):
+        # productive cough, night sweats, weight loss, crackles, hemoptysis. A cohabiting-
+        # infection query should surface a housemate/sibling who presents with these, so the
+        # graph mirrors the answer's transmission pathway (e.g. Animesh's brother's active TB).
+        triggers = ["infection", "infectious", "contagious", "transmissible", "transmit",
+                    "exposure", "exposed", "tuberculosis", "tb", "respiratory", "cough",
+                    "roommate", "cohabit", "shared", "household", "sibling", "brother", "sister"]
 
     return any(t in query_lower for t in triggers)
 
