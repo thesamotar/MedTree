@@ -17,11 +17,18 @@ services:
       # Comma-separated list of allowed frontend origins — set to your Vercel URL(s).
       - key: ALLOWED_ORIGINS
         sync: false
+      # OpenAI powers Cognee's LLM extraction + embeddings. Note the name: Cognee reads the
+      # OpenAI key from LLM_API_KEY (NOT OPENAI_API_KEY). Must have embedding credits.
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: gpt-4o-mini
       # Claude powers the clinical thesis.
       - key: ANTHROPIC_API_KEY
         sync: false
-      # Gemini powers Cognee's LLM extraction + embeddings (and is the LLM fallback).
-      - key: GEMINI_API_KEY
-        sync: false
       - key: CLAUDE_MODEL
         value: claude-3-5-sonnet-20240620
+      # Optional: Gemini is only used as the LLM fallback if Anthropic is unavailable.
+      # Leave blank if you don't have a Gemini key.
+      - key: GEMINI_API_KEY
+        sync: false
